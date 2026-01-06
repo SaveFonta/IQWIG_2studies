@@ -1,0 +1,184 @@
+---
+title: "Singular MA"
+format: 
+  html:
+    code-fold: false
+    code-tools: false
+params:
+  ma_no: 1        # ID numerico del MA (colonna no)
+---
+
+```{r}
+#| label: setup
+#| include: false
+
+# Function to load libraries quietly
+load_libraries <- function(...) {
+  pkgs <- as.character(match.call(expand.dots = FALSE)$...)
+  
+  for (pkg in pkgs) {
+    if (!require(pkg, character.only = TRUE, quietly = TRUE)) {
+      install.packages(pkg, quiet = TRUE)
+      library(pkg, character.only = TRUE, quietly = TRUE)
+    }
+  }
+}
+
+# Load libraries
+load_libraries("gt", "dplyr", "tibble")
+
+# Source files
+suppressMessages({
+  source("00_confMeta_parallelized.R")
+  source("00_utilities.R")
+})
+
+# Load data
+input <- readRDS("cis.rds")
+cis <- input$cis
+df_estimates <- input$df_estimates
+
+# Select this MA based on parameter
+this_no <- params$ma_no
+
+sub <- df_estimates[df_estimates$no == this_no, , drop = FALSE]
+
+if (nrow(sub) == 0) {
+  stop("No rows found for ma_no = ", this_no)
+}
+
+# Calculate results for this MA
+res <- confMeta.full(
+  data             = sub,
+  level            = 0.95,
+  est_col          = "logEst",
+  se_col           = "selogEst",
+  include_bayesian = FALSE,
+  generate_plot    = TRUE,
+  plot_types       = c("p", "forest")
+)
+```
+
+```{r}
+#| output: asis
+#| echo: false
+
+# l è il singolo meta-analisi
+l <- res[[1]]
+
+# Header (usa ma_id dall'oggetto)
+cat("## ", l$ma_id, "\n\n", sep = "")
+
+cat("This is meta-analysis number **",l$ma_id_number, "**, it uses the **", l$measure, "** as an outcome measure.\n\n", sep = "")
+
+cat("The Data Formatting is **", l$additional_info$data_report, "**, and it belongs to the sheet: ", l$additional_info$sheet_name, "\n\n", sep = "")
+
+
+# -----------------------------
+# Table 1: input studies
+# -----------------------------
+cat("The meta-analysis contains the following studies:\n\n")
+
+tbl_inputs <- as.data.frame(l$inputs) %>%
+  tibble::rownames_to_column(var = "Study") %>%
+  gt() %>%
+  cols_label(
+    Study    = "Study Name",
+    estimate = "Log Estimate",
+    SE       = "Standard Error"
+  ) %>%
+  fmt_number(columns = c(estimate, SE), decimals = 3) %>%
+  opt_stylize(style = 6, color = "blue") 
+print(tbl_inputs)
+cat("\n\n")
+
+# -----------------------------
+# Table 2: CIs
+# -----------------------------
+cat("The confidence intervals, calculated with different methods, are shown below.\n\n")
+
+tbl_results <- l$ci %>%
+  dplyr::select(-estimate) %>% 
+  gt() %>%
+  fmt_number(
+    columns = c(lower, upper, aucc, p_0, width, aucc_ratio, ci_skewness), 
+    decimals = 3
+  ) %>%
+  sub_missing(
+    columns = everything(),
+    missing_text = "—"
+  ) %>%
+  cols_merge(
+    columns = c(lower, upper),
+    pattern = "({1}, {2})"
+  ) %>%
+  cols_label(
+    method      = "Method",
+    lower       = "95% CI",
+    aucc        = "AUCC",
+    aucc_ratio  = "AUCC Ratio",
+    ci_skewness = "Skewness (β)",
+    p_0         = "p-val (μ = 0)",
+    width       = "Width"
+  ) %>%
+  cols_align(align = "center", columns = -method) %>%
+  tab_style(
+    style = list(
+      cell_text(weight = "bold", color = "#2c3e50")
+    ),
+    locations = cells_body(
+      columns = lower,
+      rows = significant == TRUE
+    )
+  ) %>%
+  cols_hide(columns = c(significant)) %>%
+  opt_stylize(style = 6, color = "blue") 
+print(tbl_results)
+
+# -----------------------------
+# Weighted skewness
+# -----------------------------
+cat(
+  "\n\n**Weighted skewness of study effects (γ):** ",
+  round(l$data_skewness, 3),
+  "\n\n",
+  sep = ""
+)
+
+# -----------------------------
+# Lemma 4.3.1 
+# -----------------------------
+lc <- l$lemma_check
+
+if (!is.null(lc)) {
+  cat("\n\n### Lemma 4.3.1\n\n")
+  
+  cond_text <- dplyr::case_when(
+    isTRUE(lc$condition1_holds) && isTRUE(lc$condition2_holds) ~
+      "Both Condition 1 and Condition 2 hold.",
+    isTRUE(lc$condition1_holds) ~
+      "Only Condition 1 holds.",
+    isTRUE(lc$condition2_holds) ~
+      "Only Condition 2 holds.",
+    TRUE ~
+      "Neither Condition 1 nor Condition 2 holds."
+  )
+  
+  cat(cond_text, "\n\n")
+  
+  if (isTRUE(lc$lemma_verified)) {
+    cat("Lemma 4.3.1 is **verified** in this meta-analysis (the Edgington confidence interval is shorter than the fixed-effect confidence interval as predicted).\n\n")
+  } else if (isTRUE(lc$reverse_lemma_not_true)) {
+    cat("In this meta-analysis, the Edgington confidence interval is shorter even though neither condition holds. This shows that the **reverse** of Lemma 4.3.1 does not hold: the conditions are sufficient but not necessary.\n\n")
+  } else if (isFALSE(lc$applicable)) {
+    cat("Lemma 4.3.1 is not applicable for this meta-analysis (e.g., it does not involve exactly two studies).\n\n")
+  }
+}
+
+# -----------------------------
+# Plot
+# -----------------------------
+cat("In a graphical representation, this looks as follows.\n\n")
+print(l$plot)
+
+```
