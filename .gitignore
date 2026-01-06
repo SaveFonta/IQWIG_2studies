@@ -1,0 +1,9 @@
+.Rhistory
+.RData
+.Rproj.user/
+*.Rproj
+*.xlsx
+*.xls
+*.docx
+*.rds
+*.RData
