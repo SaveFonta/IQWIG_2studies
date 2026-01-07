@@ -1007,3 +1007,152 @@ lemma_summary %>%
 ```
 
 {{< pagebreak >}}
+
+
+# Checking Estimates
+
+Inspecting the Estimates (which are the point which has the highest p-value) provided by each method
+```{r}
+
+estimates_df <- extract_ma_metric(cis, "estimates")
+
+# Calculate summary statistics
+estimate_summary <- estimates_df %>%
+  group_by(method) %>%
+  summarise(
+    mean = mean(estimates, na.rm = TRUE),
+    sd = sd(estimates, na.rm = TRUE),
+    median = median(estimates, na.rm = TRUE),
+    q25 = quantile(estimates, 0.25, na.rm = TRUE),
+    q75 = quantile(estimates, 0.75, na.rm = TRUE),
+    min = min(estimates, na.rm = TRUE),
+    max = max(estimates, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+
+estimate_summary %>%
+  gt() %>%
+  tab_header(
+    title = md("**Meta Analytic estimates**"),
+  ) %>%
+  cols_label(
+    method = "Method",
+    mean = "Mean",
+    sd = "SD",
+    median = "Median",
+    q25 = "Q25",
+    q75 = "Q75",
+    min = "Min",
+    max = "Max"
+  ) %>%
+  fmt_number(
+    columns = c(sd, median, q25, q75, min, max),
+    decimals = 2
+  ) %>%
+    fmt_number(
+    columns = c(mean),
+    decimals = 4 
+  ) %>% 
+  cols_align(
+    align = "center",
+    columns = -method
+  ) %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_column_labels()
+  ) %>%
+  opt_stylize(style = 6, color = "blue") 
+```
+
+
+
+Here, delta(Δ) = designated method - Fixed effect
+```{r}
+
+# wide: one row per MA, one column per method
+wide_estimates <- estimates_df %>%
+  select(MA, method, estimates) %>%
+  pivot_wider(names_from = method, values_from = estimates)
+
+# long comparison vs FE
+long_vs_FE <- wide_estimates %>%
+  pivot_longer(
+    cols = -c(MA, `Fixed effect`), #keep FE as column so that I can compare
+    names_to = "method",
+    values_to = "method_est"
+  ) %>%
+  mutate(
+    delta = method_est - `Fixed effect`,
+    method_bigger_FE = method_est > `Fixed effect`,
+    method_smaller_FE = method_est < `Fixed effect`,
+    equal = method_est == `Fixed effect`
+  )
+
+
+# summary table
+summary_vs_FE <- long_vs_FE %>%
+  group_by(method) %>%
+  summarise(
+    n = n(),
+    pct_method_bigger_FE = mean(method_bigger_FE) * 100,
+    pct_method_smaller_FE = mean(method_smaller_FE) * 100,
+    pct_equal = mean(equal) * 100,
+    mean_delta = mean(delta),
+    mean_abs_delta = mean(abs(delta)),
+    .groups = "drop"
+  )
+
+summary_vs_FE %>% 
+  gt() %>%
+  tab_header(
+    title = md("**Meta Analytic delta-estimates**"),
+  ) %>%
+  cols_label(
+    method = "Method",
+    n = "N studies",
+    pct_method_bigger_FE = "Bigger than FE (%)",
+    pct_method_smaller_FE = "Smaller than FE (%)",
+    pct_equal = "Equal (%)",
+    mean_delta = "Mean Δ",
+    mean_abs_delta = "Mean Abs Δ"
+  ) %>%
+  fmt_number(
+    columns = c(pct_method_bigger_FE, pct_method_smaller_FE),
+    decimals = 2
+  ) %>%
+    fmt_number(
+    columns = c(mean_delta, mean_abs_delta),
+    decimals = 4 
+  ) %>% 
+  cols_align(
+    align = "center",
+    columns = -method
+  ) %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_column_labels()
+  ) %>%
+  opt_stylize(style = 6, color = "blue") 
+
+```
+
+```{r}
+
+#COMMENTED OUT:
+# Not sure if we want to inspect those studies where we have the same meta analytic estimate
+
+#same_estimate <- wide_estimates %>% 
+#  filter (Edgington == `Fixed effect`)
+
+#list <- same_estimate$MA
+
+
+#un <- unlist(list)
+#same_est <- cis[un]
+
+#extract only inputs from each elemnt of the list
+#lapply(same_est, "[[" , "inputs")
+
+```
+
