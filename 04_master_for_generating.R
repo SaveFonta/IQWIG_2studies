@@ -16,7 +16,7 @@ if (!require("dplyr", quietly = TRUE)) {
 
 
 # Define name of the singular MA qmd
-input_qmd <- "singular_ma.qmd"  
+input_qmd <- "singular_MA.qmd"
 
 path <- file.path ("Output", "cis.rds")
 input <- readRDS(path)
