@@ -25,6 +25,7 @@
 #'   (default: "data_report").
 #' @param additional_info2_col Character. Name of second additional info column
 #'   (default: "sheet_name").
+#' @param sign_threshold Numeric. Value used to check if the confidence interval contains the null hypothesis (default: 0).#'   
 #' @param ... Additional arguments passed to \code{get_ma_results()}.
 #'
 #' @return An object of class "confMeta.full.list" containing a named list of
@@ -125,6 +126,7 @@ confMeta.full <- function(data,
                    show_progress = TRUE,
                    additional_info1_col = "data_report",
                    additional_info2_col = "sheet_name",
+                   sign_threshold = 0,
                    ...) {
   
   if (!is.numeric(data[[ma_id_col_num]])) {
@@ -306,6 +308,7 @@ confMeta.full <- function(data,
 #' @param effect.measure Character. Name of effect measure column.
 #' @param additional_info1_col Character. First additional info column (optional).
 #' @param additional_info2_col Character. Second additional info column (optional).
+#' @param sign_threshold Numeric. Value used to check if the confidence interval contains the null hypothesis (default: 0).
 #' @param ... Additional arguments passed to \code{get_ma_results()}.
 #'
 #' @return An object of class "confMeta.full" or NULL if processing fails.
@@ -317,7 +320,7 @@ confMeta.full <- function(data,
 
 process_single_ma <- function(id, df, id_col_name, n0, est_col, se_col, level, study, effect.measure,
                               additional_info1_col = NULL, 
-                              additional_info2_col = NULL, 
+                              additional_info2_col = NULL, sign_threshold = 0,
                               ...) {
   # Subset data just from this meta-analysis
   subset_data <- df[df[[id_col_name]] == id, , drop = FALSE]
@@ -432,6 +435,7 @@ process_single_ma <- function(id, df, id_col_name, n0, est_col, se_col, level, s
 #'   is OR (default: 0.2).
 #' @param tau_prior_scale_smd Numeric. Prior scale for tau when effect measure
 #'   is SMD (default: 0.3).
+#' @param sign_threshold Numeric. Value used to check if the confidence interval contains the null hypothesis (default: 0).
 #' @param ... Additional arguments (currently unused).
 #'
 #' @return An object of class "confMeta.full" (see \code{\link{confMeta.full}} for details).
@@ -496,6 +500,7 @@ get_ma_results <- function(data,
                            tau_prior_scale_rr = 0.1,
                            tau_prior_scale_or = 0.2,
                            tau_prior_scale_smd = 0.3,
+                           sign_threshold = 0,
                            ...) {
   
   # ---- Take values ----
@@ -577,7 +582,7 @@ get_ma_results <- function(data,
   
   # ---- Create CI Summary Data Frame ----
 
-  ci_out <- .create_ci_dataframe(ci_all)
+  ci_out <- .create_ci_dataframe(ci_all, sign_threshold = sign_threshold)
   
   # Filter out unwanted methods
   ci_out <- ci_out %>%
@@ -667,6 +672,7 @@ get_ma_results <- function(data,
   significant <- setNames(ci_out$significant, ci_out$method)
   p_0 <- setNames(ci_out$p_0, ci_out$method)
   ci_skewness <- setNames(ci_out$ci_skewness, ci_out$method)
+  estimates <- setNames(ci_out$estimate, ci_out$method)
   
   # Tau-squared estimates
   tau2 <- c("Bayesian" = tau2_bayes)
@@ -678,6 +684,7 @@ get_ma_results <- function(data,
     inputs = inputs,
     ma_id = ma_id,
     ma_id_number = ma_id_number, 
+    estimates = estimates,
     measure = meas,
     plot = plots,
     ci = ci_out,
@@ -722,7 +729,7 @@ get_ma_results <- function(data,
 #' Create CI DataFrame from List
 #' @keywords internal
 #' @noRd
-.create_ci_dataframe <- function(ci_list) {
+.create_ci_dataframe <- function(ci_list, sign_threshold = 0) {
   # Convert list of CIs to df
   ci_df <- do.call("rbind", lapply(seq_along(ci_list), function(x) {
     m <- ci_list[[x]]
@@ -750,7 +757,7 @@ get_ma_results <- function(data,
   # Add significance (test if 0 is in interval)
   significant <- vapply(
     ci_list,
-    function(x) !(x[,"lower"]<0 & x[,"upper"]>0),
+    function(x) !(x[,"lower"]< sign_threshold & x[,"upper"]> sign_threshold),
     logical(1L)
   )
   ci_df <- merge(
