@@ -13,30 +13,15 @@ if (!require("dplyr", quietly = TRUE)) {
   library(dplyr)
 }
 
-# ==============================================================================
-# Setup
-# ==============================================================================
 
-# Define paths
-input_qmd <- "singular_ma.qmd"  # Nome del tuo file Quarto
-output_dir <- "Output"
 
-# Create output directory if it doesn't exist
-if (!dir.exists(output_dir)) {
-  dir.create(output_dir, recursive = TRUE)
-  cat("Created output directory:", output_dir, "\n")
-}
-
-# ==============================================================================
-# Load Data and Get MA Numbers
-# ==============================================================================
-
-cat("Loading data from cis.rds...\n")
+# Define name of the singular MA qmd
+input_qmd <- "singular_ma.qmd"  
 
 path <- file.path ("Output", "cis.rds")
 input <- readRDS(path)
 df_estimates <- input$df_estimates
-df_estimates <- input$df_estimates
+
 
 # Get unique MA numbers with their info
 ma_info <- df_estimates %>%
@@ -46,9 +31,7 @@ ma_info <- df_estimates %>%
 
 cat("Found", nrow(ma_info), "unique meta-analyses\n\n")
 
-# ==============================================================================
-# Generate Reports for Each MA
-# ==============================================================================
+# ---- Generate Reports for Each MA ----
 
 # Track progress
 total_mas <- nrow(ma_info)
@@ -68,9 +51,10 @@ for (i in 1:nrow(ma_info)) {
               i, total_mas, ma_no, ma_id))
   cat(sprintf("        Sheet: %s\n", sheet))
   
-  # Define output filename using only MA identifier
+  #Without this gsub, it wouldn't run, we need to normalize the id
   safe_id <- gsub("[^A-Za-z0-9_-]", "_", ma_id)
-  output_file <- file.path(output_dir, sprintf("%s.html", safe_id))
+  output_file <- file.path("Output", sprintf("%s.html", safe_id))
+  
   
   # Try to render the report
   tryCatch({
@@ -86,13 +70,13 @@ for (i in 1:nrow(ma_info)) {
       pandoc_args = c("--embed-resources", "--standalone")
     )
     
-    # Move file to output directory if needed
+    # Move file to output directory
     if (file.exists(basename(output_file))) {
       file.rename(basename(output_file), output_file)
     }
     
     successful <- successful + 1
-    cat(sprintf("        ✓ Successfully created: %s\n", output_file))
+    cat(sprintf("        :) Successfully created: %s\n", output_file))
     
   }, error = function(e) {
     failed <- failed + 1
@@ -102,13 +86,13 @@ for (i in 1:nrow(ma_info)) {
       ma_id = ma_id,
       error = error_msg
     )
-    cat(sprintf("        ✗ ERROR: %s\n", error_msg))
+    cat(sprintf("        X ERROR: %s\n", error_msg))
   })
 }
 
-# ==============================================================================
-# Summary
-# ==============================================================================
+
+# ---- Summary ----
+
 
 cat("\n", rep("=", 70), "\n", sep = "")
 cat("SUMMARY\n")
@@ -127,13 +111,10 @@ if (failed > 0) {
   }
 }
 
-cat("\nAll reports saved in:", normalizePath(output_dir), "\n")
+cat("\nAll reports saved in: Output\n")
 
-# ==============================================================================
-# Optional: Create Index File
-# ==============================================================================
+# ---- Final HTML file
 
-cat("\nCreating index file...\n")
 
 index_content <- paste0(
   "<!DOCTYPE html>\n",
@@ -174,6 +155,7 @@ for (i in 1:nrow(ma_info)) {
   safe_id <- gsub("[^A-Za-z0-9_-]", "_", ma_id)
   filename <- sprintf("%s.html", safe_id)
   
+  
   index_content <- paste0(
     index_content,
     "    <tr>\n",
@@ -195,8 +177,8 @@ index_content <- paste0(
   "</html>"
 )
 
-index_file <- file.path(output_dir, "index.html")
+index_file <- file.path("Output", "index.html")
 writeLines(index_content, index_file)
 cat("Index file created:", index_file, "\n")
 
-cat("\n✓ Done! Open", normalizePath(index_file), "to view all reports.\n")
+cat("\n Done! Open", normalizePath(index_file), "to view all reports.\n")

@@ -36,7 +36,9 @@ suppressMessages({
 })
 
 # Load data
-input <- readRDS("cis.rds")
+inp <- "Output"
+path <- file.path (inp, "cis.rds")
+input <- readRDS(path)
 cis <- input$cis
 df_estimates <- input$df_estimates
 
