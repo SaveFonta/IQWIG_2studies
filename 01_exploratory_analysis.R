@@ -2,13 +2,20 @@
 ## IQWiG meta-analysis database – exploratory script   ##
 ## Author: Saverio Fontana      ##
 ############################################################
+
+
+#NOTE: 
+#this file is just an exploratory analysis, there is no necessity to run it cause its noly 
+#purpose is to understand what cleaning step to perform in the data_cleaning file
+
 library(readxl)
 library(dplyr)
 library(tidyr)
 
 
 ## ---- Path to the Excel file ----
-path_to_excel <- "IQWiG-MA-Datenbank_Stand2024.xlsx"  
+path_to_excel <- file.path("Input", "IQWiG-MA-Datenbank_Stand2024.xlsx"  )
+
 
 ## Read sheets
 
@@ -353,6 +360,12 @@ rows_no_estimate <- iqwig_all %>%
 
 cat("Rows with NO usable estimate:", nrow(rows_no_estimate), "\n")
 
+#here is the rows wwithout estimaets:
+# N18-03 || Abb. 64 || SF-36 körperliche Rollenfunktion
+#N18-03 || Abb. 65 || SF-36 emotionale Rollenfunktion
+
+
+
 ## ---- Recompute AnzahlStudien after dropping unusable rows ----
 
 #find how many rows we are dropping for each MA id
@@ -507,6 +520,8 @@ print(ma_size_dist)
 # Exctract just the two studies MA
 data_2_studies <- iqwig_all[iqwig_all$AnzahlStudien == 2, ]
 cat ("Number of MA with 2 studies", length(unique(data_two_studies$MA_id)))
+
+
 
 # put this as last so I can use source in my master file
 data_2_studies
