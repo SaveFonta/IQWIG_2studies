@@ -1,11 +1,13 @@
 ---
-title: "Singular MA"
+title: "`r params$ma_title`"
 format: 
   html:
+    embed-resources: true
     code-fold: false
     code-tools: false
 params:
   ma_no: 1        # ID numerico del MA (colonna no)
+  ma_title: "Singular MA"  # default
 ---
 
 ```{r}
