@@ -32,7 +32,10 @@ if (!dir.exists(output_dir)) {
 # ==============================================================================
 
 cat("Loading data from cis.rds...\n")
-input <- readRDS("cis.rds")
+
+path <- file.path ("Output", "cis.rds")
+input <- readRDS(path)
+df_estimates <- input$df_estimates
 df_estimates <- input$df_estimates
 
 # Get unique MA numbers with their info
@@ -73,10 +76,14 @@ for (i in 1:nrow(ma_info)) {
   tryCatch({
     quarto::quarto_render(
       input = input_qmd,
-      execute_params = list(ma_no = ma_no),
+      execute_params = list(
+        ma_no = ma_no,
+        ma_title = ma_id
+      ),
       output_file = basename(output_file),
       output_format = "html",
-      quiet = FALSE
+      quiet = FALSE,
+      pandoc_args = c("--embed-resources", "--standalone")
     )
     
     # Move file to output directory if needed
@@ -150,8 +157,6 @@ index_content <- paste0(
   "<body>\n",
   "  <h1>Meta-Analysis Reports</h1>\n",
   "  <div class='summary'>\n",
-  "    <strong>Summary:</strong> ", successful, " reports generated successfully",
-  ifelse(failed > 0, paste0(" (", failed, " failed)"), ""), "\n",
   "  </div>\n",
   "  <table>\n",
   "    <tr>\n",
