@@ -1008,10 +1008,10 @@ lemma_summary %>%
 
 {{< pagebreak >}}
 
-
 # Checking Estimates
 
 Inspecting the Estimates (which are the point which has the highest p-value) provided by each method
+
 ```{r}
 
 estimates_df <- extract_ma_metric(cis, "estimates")
@@ -1065,9 +1065,8 @@ estimate_summary %>%
   opt_stylize(style = 6, color = "blue") 
 ```
 
-
-
 Here, delta(Δ) = designated method - Fixed effect
+
 ```{r}
 
 # wide: one row per MA, one column per method
@@ -1078,16 +1077,19 @@ wide_estimates <- estimates_df %>%
 # long comparison vs FE
 long_vs_FE <- wide_estimates %>%
   pivot_longer(
-    cols = -c(MA, `Fixed effect`), #keep FE as column so that I can compare
+    cols = -c(MA, `Fixed effect`),#keep FE as column so that I can compare
     names_to = "method",
     values_to = "method_est"
   ) %>%
   mutate(
-    delta = method_est - `Fixed effect`,
+    fe = `Fixed effect`,
+    delta = method_est - fe,
     method_bigger_FE = method_est > `Fixed effect`,
     method_smaller_FE = method_est < `Fixed effect`,
     equal = method_est == `Fixed effect`
-  )
+  ) %>% 
+  select (-`Fixed effect`)
+
 
 
 # summary table
@@ -1102,6 +1104,7 @@ summary_vs_FE <- long_vs_FE %>%
     mean_abs_delta = mean(abs(delta)),
     .groups = "drop"
   )
+
 
 summary_vs_FE %>% 
   gt() %>%
@@ -1156,3 +1159,140 @@ summary_vs_FE %>%
 
 ```
 
+## Agreement of sign of Estimates
+
+Comparison of the **direction** of each method’s estimate with the **Fixed Effect** one.
+
+For each method, we summarise how often the sign is well defined, the proportion of meta-analyses with the **same sign as FE**, the proportion with a **sign flip relative to FE**, and how often the FE estimate is near zero.
+
+*NOTE* (values with absolute value below a small threshold `tol` are treated as near zero)
+
+```{r}
+
+# Sign treshold ->  If a value is smaller than this, it is not considered as a sign. VALUE CAN BE CHANGED 
+tol <- 1e-6
+
+#Better sign function w tolerance
+sign3 <- function(x, tol) {
+       ifelse(abs(x) <= tol, 0L, ifelse(x > 0, 1L, -1L)) 
+}
+
+long_vs_FE <- long_vs_FE %>%
+  mutate(
+    sign_fe = sign3(fe, tol),
+    sign_method = sign3(method_est, tol),
+    sign_defined = (sign_fe != 0L) & (sign_method != 0L),
+    sign_agree = ifelse(sign_defined, sign_fe == sign_method, NA),
+    sign_flip  = ifelse(sign_defined, sign_fe != sign_method, NA)
+  )
+
+
+
+
+summ_long_vs_FE <- long_vs_FE %>%
+  group_by(method) %>%
+  summarise(
+    n_total = n(),
+    n_sign_defined = sum(sign_defined, na.rm = TRUE),
+    prop_same_sign = mean(sign_agree, na.rm = TRUE) *100,
+    prop_flip_sign = mean(sign_flip,  na.rm = TRUE) * 100,
+    prop_fe_near0 = mean(sign_fe == 0L) * 100,
+    .groups = "drop"
+  )
+
+
+summ_long_vs_FE %>%
+  gt() %>%
+  tab_header(
+    title = md("**Agreement of sign with Fixed Effect**")
+  ) %>%
+  cols_label(
+    method = "Method",
+    n_total = "N studies",
+    n_sign_defined = "Sign defined",
+    prop_same_sign = "Same sign as FE (%)",
+    prop_flip_sign = "Sign flip vs FE (%)",
+    prop_fe_near0 = "FE near zero (%)"
+  ) %>%
+  fmt_number(
+    columns = c(prop_same_sign, prop_flip_sign, prop_fe_near0),
+    decimals = 2
+  ) %>%
+  fmt_number(
+    columns = c(n_total, n_sign_defined),
+    decimals = 0,
+    use_seps = TRUE
+  ) %>%
+  cols_align(
+    align = "center",
+    columns = -method
+  ) %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_column_labels()
+  ) %>%
+  opt_stylize(style = 6, color = "blue")
+
+
+```
+
+## Shrinkage ratio
+
+\$SR = \\hat{\\mu}\_{\\text{method}} / \\hat{\\mu}\_{\\text{FE}}\$
+
+Negative values of SR indicate a **sign flip** relative to FE, while positive values indicate agreement in direction. Among positive ratios, values between 0 and 1 correspond to **shrinkage toward zero** relative to FE, and values larger than 1 indicate **more extreme estimates** than FE.
+
+For each method, we report how often estimates flip sign, how often they are shrunken toward zero, how often they are more extreme than FE.
+
+```{r}
+
+# ---- SHRINKAGE RATIO SR = method / FE ----
+
+ratio_df <- long_vs_FE %>%
+  mutate(
+    SR = method_est / fe,                     #  shrinkage ratio
+    SR_class = case_when(
+      SR < 0 ~ "Flip sign (SR<0)",
+      SR >= 0 & SR < 1 ~ "Shrink toward 0 (0<=SR<1)",
+      SR == 1 ~ "Equal (SR=1)",
+      SR > 1 ~ "More extreme (SR>1)"
+      )
+  )
+
+ratio_summary <- ratio_df %>%
+  group_by(method) %>%
+  summarise(
+    n = n(),
+    prop_flip = mean(SR < 0, na.rm = TRUE) *100,
+    prop_shrink = mean(SR >= 0 & SR < 1, na.rm = TRUE) *100,
+    prop_more_extreme = mean(SR > 1, na.rm = TRUE) * 100,
+    .groups = "drop"
+  )
+
+ratio_summary %>% 
+  gt() %>%
+  tab_header(
+    title = md("**Shrinkage ratio summary**"),
+  ) %>%
+  cols_label(
+    method = "Method",
+    n = "N studies",
+    prop_flip = "Flipped signs (%)",
+    prop_shrink = "Shrinked estimates(%)",
+    prop_more_extreme = "More extreme estimates (%)"
+    ) %>%
+  fmt_number(
+    columns = c(prop_flip, prop_shrink, prop_more_extreme),
+    decimals = 2
+  ) %>% 
+  cols_align(
+    align = "center",
+    columns = -method
+  ) %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_column_labels()
+  ) %>%
+  opt_stylize(style = 6, color = "blue") 
+
+```
