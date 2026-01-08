@@ -95,9 +95,27 @@ a %>%
   )
 ```
 
+## Measure employed
+
+This is an overview of the different measures employed over the file
+
+```{r}
+df_estimates %>%
+  count(effect.measure, .drop = FALSE)  %>%   
+  mutate(n = n/2 ) %>% 
+   arrange(desc(n)) %>% 
+   gt() %>%
+  # Relabel Columns
+  cols_label(
+    effect.measure = md("**How measures are reported**"),
+    n = md("**Number**")
+  )
+
+```
+
 ## Data formatting
 
-Another interesting fact was the way IQWIG reported the raw data. I classified them in 13 possible ways. This also show us which are the most common ways of reporting data.
+Another interesting fact was the way IQWIG reported the raw data. I classified them in 13 possible ways. This also show us which are the most common ways of reporting Meta Anslysis.
 
 -   **2x2 OR**: Binary outcome reported as a 2×2 event table (a,b,c,d); effect computed as log odds ratio from counts.
 
@@ -133,6 +151,7 @@ Another interesting fact was the way IQWIG reported the raw data. I classified t
 df_estimates %>%
   count(data_report, .drop = FALSE)  %>%   
    arrange(desc(n)) %>% 
+  mutate (n = n/2) %>% 
    gt() %>%
   # Relabel Columns
   cols_label(
@@ -202,6 +221,84 @@ width_summary %>%
 
 {{< pagebreak >}}
 
+### Width by effect measure 
+
+Widths stratified by effect measure
+```{r}
+# Extract widths
+widths <- extract_ma_metric(cis, "width")
+
+# Calculate summary statistics stratified by effect.measure and method
+width_summary <- widths %>%
+  group_by(measure, method) %>%
+  summarise(
+    mean = mean(width),
+    sd = sd(width),
+    median = median(width),
+    q25 = quantile(width, 0.25),
+    q75 = quantile(width, 0.75),
+    min = min(width),
+    max = max(width),
+    .groups = "drop"
+  )
+
+# Create table
+width_summary %>%
+  gt(groupname_col = "measure") %>%
+  tab_header(
+    title = md("**Confidence Interval Widths by Effect Measure and Method**"),
+  ) %>%
+  cols_label(
+    method = "Method",
+    mean = "Mean",
+    sd = "SD",
+    median = "Median",
+    q25 = "Q25",
+    q75 = "Q75",
+    min = "Min",
+    max = "Max"
+  ) %>%
+  fmt_number(
+    columns = c(mean, sd, median, q25, q75, min, max),
+    decimals = 2
+  ) %>%
+  cols_align(
+    align = "center",
+    columns = -method
+  ) %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_column_labels()
+  ) %>%
+  opt_stylize(style = 6, color = "blue")
+
+```
+
+For a better plotting, I removed the HK 
+
+```{r}
+widths_noHK <- widths %>% 
+  filter (method != "Hartung & Knapp")
+
+ggplot(widths_noHK, aes(x = method, y = width, fill = method)) +
+  geom_boxplot(alpha = 0.7) +
+  facet_wrap(~ measure, scales = "free_y") +
+  labs(
+    title = "Distribution of Confidence Interval Widths",
+    subtitle = "By Effect Measure and Method",
+    x = "Method",
+    y = "CI Width"
+  ) +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold", size = 14),
+    strip.background = element_rect(fill = "lightblue")
+  ) +
+  scale_fill_brewer(palette = "Set2")
+```
+
 ## Confidence interval skewness
 
 The skewness of each confidence interval is computed as:
@@ -260,7 +357,7 @@ ci_skewness %>%
 
 {{< pagebreak >}}
 
-## Summary of Confidence Interval Coverage
+## Summary of Confidence Interval
 
 How many individual study estimates fall outside their respective meta-analytic confidence intervals?
 
@@ -1163,9 +1260,11 @@ summary_vs_FE %>%
 
 Comparison of the **direction** of each method’s estimate with the **Fixed Effect** one.
 
-For each method, we summarise how often the sign is well defined, the proportion of meta-analyses with the **same sign as FE**, the proportion with a **sign flip relative to FE**, and how often the FE estimate is near zero.
+For each method, we summarise:
 
-*NOTE* (values with absolute value below a small threshold `tol` are treated as near zero)
+The proportion of meta-analyses for which at least one of the FE or method estimates has no well-defined sign (\|estimate\| ≤ tol).
+
+The proportion of meta-analyses where the method has the same sign as FE and the proportion with a flipped sign relative to FE, **among all meta-analyses**
 
 ```{r}
 
@@ -1181,9 +1280,9 @@ long_vs_FE <- long_vs_FE %>%
   mutate(
     sign_fe = sign3(fe, tol),
     sign_method = sign3(method_est, tol),
-    sign_defined = (sign_fe != 0L) & (sign_method != 0L),
-    sign_agree = ifelse(sign_defined, sign_fe == sign_method, NA),
-    sign_flip  = ifelse(sign_defined, sign_fe != sign_method, NA)
+    sign_defined = (sign_fe != 0L) & (sign_method != 0L), #both different from 0
+    sign_agree = ifelse(sign_defined, sign_fe == sign_method, NA), # same sign, if sign not defined put NA
+    sign_flip = ifelse(sign_defined, sign_fe != sign_method, NA),
   )
 
 
@@ -1193,10 +1292,9 @@ summ_long_vs_FE <- long_vs_FE %>%
   group_by(method) %>%
   summarise(
     n_total = n(),
-    n_sign_defined = sum(sign_defined, na.rm = TRUE),
-    prop_same_sign = mean(sign_agree, na.rm = TRUE) *100,
-    prop_flip_sign = mean(sign_flip,  na.rm = TRUE) * 100,
-    prop_fe_near0 = mean(sign_fe == 0L) * 100,
+    prop_sign_non.defined = mean(!sign_defined, na.rm = TRUE) *100,
+    prop_same_sign = sum(sign_agree, na.rm = TRUE) / n_total *100,
+    prop_flip_sign = sum(sign_flip, na.rm = TRUE) / n_total * 100,
     .groups = "drop"
   )
 
@@ -1209,17 +1307,16 @@ summ_long_vs_FE %>%
   cols_label(
     method = "Method",
     n_total = "N studies",
-    n_sign_defined = "Sign defined",
+    prop_sign_non.defined = "Sign not defined (%)",
     prop_same_sign = "Same sign as FE (%)",
     prop_flip_sign = "Sign flip vs FE (%)",
-    prop_fe_near0 = "FE near zero (%)"
   ) %>%
   fmt_number(
-    columns = c(prop_same_sign, prop_flip_sign, prop_fe_near0),
+    columns = c(prop_sign_non.defined, prop_same_sign, prop_flip_sign),
     decimals = 2
   ) %>%
   fmt_number(
-    columns = c(n_total, n_sign_defined),
+    columns = c(n_total),
     decimals = 0,
     use_seps = TRUE
   ) %>%
@@ -1238,9 +1335,10 @@ summ_long_vs_FE %>%
 
 ## Shrinkage ratio
 
-\$SR = \\hat{\\mu}\_{\\text{method}} / \\hat{\\mu}\_{\\text{FE}}\$
+$SR = \frac {\hat{\mu}_{\text{method}}}  {\hat{\mu}_{\text{FE}}}$
 
-Negative values of SR indicate a **sign flip** relative to FE, while positive values indicate agreement in direction. Among positive ratios, values between 0 and 1 correspond to **shrinkage toward zero** relative to FE, and values larger than 1 indicate **more extreme estimates** than FE.
+Negative values of SR indicate a **sign flip** relative to FE, while positive values indicate agreement in direction. Among positive ratios, values between 0 and 1 correspond to **shrinkage toward zero** relative to FE, and values larger than 1 indicate **more extreme estimates** than FE. 
+Finally, value equal to 1 indicate that the two methods provide the same estimate.
 
 For each method, we report how often estimates flip sign, how often they are shrunken toward zero, how often they are more extreme than FE.
 
@@ -1266,6 +1364,7 @@ ratio_summary <- ratio_df %>%
     prop_flip = mean(SR < 0, na.rm = TRUE) *100,
     prop_shrink = mean(SR >= 0 & SR < 1, na.rm = TRUE) *100,
     prop_more_extreme = mean(SR > 1, na.rm = TRUE) * 100,
+    prop_exactly_same = mean(SR == 1, na.rm = TRUE) * 100,
     .groups = "drop"
   )
 
@@ -1279,10 +1378,11 @@ ratio_summary %>%
     n = "N studies",
     prop_flip = "Flipped signs (%)",
     prop_shrink = "Shrinked estimates(%)",
-    prop_more_extreme = "More extreme estimates (%)"
+    prop_more_extreme = "More extreme estimates (%)",
+    prop_exactly_same = "Exactly same estimates (%)"
     ) %>%
   fmt_number(
-    columns = c(prop_flip, prop_shrink, prop_more_extreme),
+    columns = c(prop_flip, prop_shrink, prop_more_extreme, prop_exactly_same),
     decimals = 2
   ) %>% 
   cols_align(

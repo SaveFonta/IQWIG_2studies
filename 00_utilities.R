@@ -354,10 +354,14 @@ extract_ma_metric <- function(cis_list, metric) {
   # add number of studies 
   res$n_studies <- vapply(cis_list, function(x) nrow(x$inputs), integer(1L))
   
+  #do the same thing by extracting measure from each element of cis_list and adding to a new column
+  res$measure <- vapply(cis_list, function(x) x$measure, character(1L))
+  
+  
   # Format so that the MA name becomes a column
   res <- rownames_to_column(res, var = "ma")
   
-  res <- pivot_longer(res, cols = !c(ma, n_studies))
+  res <- pivot_longer(res, cols = !c(ma, n_studies, measure))
   res <- rename(res, "MA" = ma, "method" = name, !!metric := value) #nice! This is the dyplier way
   
   res <- mutate(res, n_studies = group(n_studies))
