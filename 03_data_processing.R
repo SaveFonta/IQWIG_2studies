@@ -24,6 +24,18 @@ df_estimates <- process_escalc(data_two_studies)
 table(df_estimates$data_report, useNA = "always")
 
 
+#Now view distribution of effect measure
+table(df_estimates$effect.measure) /2
+
+# as you can see, there are columns with OR (effekt) and RR(effekt) --> let's merge them with OR and RR
+df_estimates <- df_estimates %>% 
+  mutate (effect.measure = ifelse(effect.measure == "OR (effekt)", "OR", effect.measure)) %>% 
+  mutate (effect.measure = ifelse(effect.measure == "RR (effekt)", "RR", effect.measure) )
+
+#Now view distribution of effect measure
+table(df_estimates$effect.measure) / 2
+#PEFECT
+
 source("00_confMeta_parallelized.R") #I'd like to add this part to the libarry confMeta
 estimates <- df_estimates
 time <- system.time ({
