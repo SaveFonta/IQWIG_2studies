@@ -1,3 +1,10 @@
+# Important note
+This repository requires the confMeta package. To install or update to the latest version, run:
+`remotes::install_github("SaveFonta/confMeta")`
+
+Note: If you have an older version installed, please remove it before reinstalling. I update the package frequently, so it is recommended to run this command periodically to ensure you have the latest features and fixes.
+
+
 # To Run
 
 1) Create an `Input` folder in the main directiory and add there your data, with the name: `IQWiG-MA-Datenbank_Stand2024.xlsx`
