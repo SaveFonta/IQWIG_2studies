@@ -32,7 +32,7 @@
 #'   meta-analysis results. Each element is an object of class "confMeta.full"
 #'   with components:
 #'   \describe{
-#'     \item{inputs}{Matrix of effect estimates and standard errors}
+#'     \item{inputs}{Dataframe of effect estimates and standard errors}
 #'     \item{ma_id}{Meta-analysis identifier}
 #'     \item{ma_id_number}{Numeric meta-analysis ID}
 #'     \item{measure}{Effect measure type (RR, HR, OR, SMD, etc.)}
@@ -562,7 +562,19 @@ get_ma_results <- function(data,
   names(cms) <- vapply(methods, `[[`, character(1L), "name")
   
   # ---- Extract Confidence Intervals ----
+  
+  #Extract individual cis, we just need to exctract them from a random method since they are all the same
+  ci_individual <- as.data.frame( cms[[1]][["individual_cis"]] ) 
 
+  
+  ci_individual <- ci_individual %>% 
+    mutate (
+      width = upper - lower,
+      significant = !(lower < sign_threshold & upper > sign_threshold)
+    )
+
+  
+  
   # Extract joint CIs from confMeta objects
   ci_new <- lapply(cms, `[[`, i = "joint_cis")
   
@@ -620,7 +632,8 @@ get_ma_results <- function(data,
       meas = meas,
       tau_prior_scale_rr = tau_prior_scale_rr,
       tau_prior_scale_or = tau_prior_scale_or,
-      tau_prior_scale_smd = tau_prior_scale_smd
+      tau_prior_scale_smd = tau_prior_scale_smd,
+      sign_threshold = sign_threshold
     )
     
     # Add Bayesian results to ci_out
@@ -661,11 +674,13 @@ get_ma_results <- function(data,
 
   # ---- Prepare Output ----
   # Input matrix
-  inputs <- matrix(
-    c(estimates, SEs),
-    ncol = 2,
-    dimnames = list(study_names, c("estimate", "SE"))
+  inputs <- data.frame(
+    estimate = estimates, 
+    SE = SEs, 
+    row.names = study_names
   )
+  
+  inputs <- cbind(inputs, ci_individual)
   
   # Extract vectors
   width <- setNames(ci_out$width, ci_out$method)
@@ -730,49 +745,30 @@ get_ma_results <- function(data,
 #' @keywords internal
 #' @noRd
 .create_ci_dataframe <- function(ci_list, sign_threshold = 0) {
-  # Convert list of CIs to df
-  ci_df <- do.call("rbind", lapply(seq_along(ci_list), function(x) {
-    m <- ci_list[[x]]
+  
+  #create list of df
+  df_list <- lapply(names(ci_list), function(m_name) {
+    m <- ci_list[[m_name]] #extract singular df
+    
+    # NOTE: i write it to handle df with any number of rows, even though not necessary 
+    lower <- m[, 1L]
+    upper <- m[, 2L]
+    
     data.frame(
-      lower = m[, 1L],
-      upper = m[, 2L],
-      method = names(ci_list)[x],
-      stringsAsFactors = FALSE,
-      row.names = NULL
+      method      = m_name,
+      lower       = lower,
+      upper       = upper,
+      width       = upper - lower,
+      significant = !(lower < sign_threshold & upper > sign_threshold),
+      stringsAsFactors = FALSE
     )
-  }))
+  })
   
-  # Add widths
-  width <- sapply(ci_list, function(x) sum(x[, "upper"] - x[, "lower"]))  
-  ci_df <- merge(
-    ci_df,
-    data.frame(
-      method = names(width),
-      width = width,
-      stringsAsFactors = FALSE
-    ),
-    by = "method", sort = FALSE
-  )
+  #from list of df to single df 
+  df <- do.call("rbind", df_list)
   
-  # Add significance (test if 0 is in interval)
-  significant <- vapply(
-    ci_list,
-    function(x) !(x[,"lower"]< sign_threshold & x[,"upper"]> sign_threshold),
-    logical(1L)
-  )
-  ci_df <- merge(
-    ci_df,
-    data.frame(
-      method = names(significant),
-      significant = significant,
-      stringsAsFactors = FALSE
-    ),
-    by = "method", sort = FALSE
-  )
-  
-  return(ci_df)
+  return(df)
 }
-
 
 
 
@@ -862,7 +858,7 @@ get_ma_results <- function(data,
 #' @keywords internal
 #' @noRd
 .run_bayesian_analysis <- function(estimates, SEs, meas, 
-                                   tau_prior_scale_rr, tau_prior_scale_or,tau_prior_scale_smd, point_estimate = "median") {
+                                   tau_prior_scale_rr, tau_prior_scale_or,tau_prior_scale_smd, point_estimate = "median", sign_threshold = sign_threshold) {
   # Set prior based on effect measure
   # Note: for two studies, they dont suggest to use this
   tau_prior <- if (meas == "RR" | meas == "HR") {
@@ -890,7 +886,7 @@ get_ma_results <- function(data,
   
   # Calculate derived metrics
   bm_width <- bm_upper - bm_lower
-  bm_significant <- !(0 > bm_lower & 0 < bm_upper)
+  bm_significant <- !(sign_threshold > bm_lower & sign_threshold < bm_upper)
   bm_ci_skewness <- (bm_upper + bm_lower - 2 * bm_est) / (bm_upper - bm_lower)
   
   # Create row for ci_out

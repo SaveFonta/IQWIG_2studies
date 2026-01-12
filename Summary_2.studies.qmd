@@ -164,6 +164,7 @@ df_estimates %>%
 
 This summary is computed using all the MA from above.
 
+
 ## Width of the confidence intervals
 
 For each method, we summarize the distribution of **CI widths** (upper − lower) across all two-study meta-analyses.
@@ -371,34 +372,50 @@ How many individual study estimates fall outside their respective meta-analytic 
 #| label: coverage-analysis
 
 # Prepare data frames
-ci_df <- bind_rows(
+ma_ci_df <- bind_rows(
   lapply(cis, function(x) {
     x$ci %>% 
       as.data.frame() %>% 
-      mutate(n_studies = nrow(x$inputs))
-  }), 
-  .id = "MA"
-)
+      mutate (
+        estimate_ma = estimate,
+        lower_MA = lower,
+        upper_MA = upper,
+        width_MA = width,
+        significant_MA = significant,
+        MA = x$ma_id
+      ) %>% 
+      select (c(MA, method, estimate_ma,lower_MA, upper_MA, width_MA, significant_MA))
+  }) )
 
-est_df <- bind_rows(
+
+input_df <- bind_rows(
   lapply(cis, function(x) {
-    df <- as.data.frame(x$inputs)
-    colnames(df)[1] <- "input_estimate"
-    return(df)
-  }), 
-  .id = "MA"
-)
+    x$inputs %>%  
+      as.data.frame() %>% 
+      mutate (
+        MA = x$ma_id,
+        study = rownames(x$inputs),
+        input_estimate = estimate,
+        input_SE = SE,
+        input_lower = lower,
+        input_upper = upper,
+        input_width = width,
+        input_significant = significant, 
+      ) %>% 
+      select (-c(estimate, SE, lower, upper, width, significant))
+  }))
 
-# Merge and calculate coverage
-merged_df <- merge(est_df, ci_df, by = "MA") %>%
+# Merge
+merged_df <- merge(input_df, ma_ci_df, by = "MA") 
+
+merged_df <- merged_df %>%
   mutate(
-    outside_CI = input_estimate < lower | input_estimate > upper
-  ) %>%
-  rename(method_point_estimate = estimate)
+    outside_CI = input_estimate < lower_MA | input_estimate > upper_MA
+  )
 
 # Calculate summary statistics
 coverage_summary <- merged_df %>%
-  group_by(method, n_studies) %>%
+  group_by(method) %>%
   summarise(
     n_estimates_total = n(),
     n_estimates_outside = sum(outside_CI, na.rm = TRUE),
@@ -411,10 +428,9 @@ coverage_summary <- merged_df %>%
 #| label: tbl-coverage
 
 coverage_summary %>%
-  select(-( n_studies)) %>% 
   gt() %>%
   tab_header(
-    title = md("**Confidence Interval Coverage Analysis**")
+    title = md("**Confidence Interval Analysis**")
   ) %>%
   cols_label(
     method = "Method",
@@ -429,7 +445,7 @@ coverage_summary %>%
   ) %>%
   fmt_percent(
     columns = prop_outside,
-    decimals = 1
+    decimals = 2
   ) %>%
   cols_align(
     align = "center",
@@ -443,12 +459,90 @@ coverage_summary %>%
   ) %>%
   tab_style(
     style = cell_text(weight = "bold"),
-    locations = cells_row_groups()
+    cells_body(columns = method)
   ) %>%
   opt_stylize(style = 6, color = "blue")
 ```
 
 {{< pagebreak >}}
+
+
+## CIs informativness
+
+
+For a given meta-analysis $x$, let the confidence interval for study $i$ be denoted by $[L_{i,x}, U_{i,x}]$, where $L_{i,x}$ is the lower bound and $U_{i,x}$ is the upper bound. Specifically for the two-study case, we have $L_{1,x}, U_{1,x}$ for study 1 and $L_{2,x}, U_{2,x}$ for study 2.
+
+Define:
+$$
+[L_{\text{min}, x}, U_{\text{max}, x}] \quad \text{s.t.} \quad L_{\text{min}, x} = \min(L_{1,x}, L_{2,x}) \quad \text{and} \quad U_{\text{max}, x} = \max(U_{1,x}, U_{2,x})
+$$
+
+Then denote the meta-analytic confidence interval by $[L_{\text{MA}, x}, U_{\text{MA}, x}]$.
+
+
+We define a meta-analytic CI as **informative** if it is contained entirely within the range of the individual study limits.
+$$
+L_{\text{MA}, x} > L_{\text{min}, x} \quad \text{and} \quad U_{\text{MA}, x} < U_{\text{max}, x}
+$$
+
+As a contrary, an interval is defined as *non-informative* if it fails to meet this criterion (i.e., it is not strictly narrower than the study range).
+
+
+```{r}
+
+bounds_df <- input_df %>% 
+  group_by(MA) %>% 
+  summarise(
+    studies_lower = min(input_lower),
+    studies_upper = max(input_upper),
+    .groups = "drop"
+  )
+
+# Merge
+merged_df <- merge(ma_ci_df, bounds_df, by = "MA")
+
+merged_df <- merged_df %>% 
+  mutate(
+    # MA CI is informative if it is NARROWER than the studies range
+    informative = (lower_MA > studies_lower & upper_MA < studies_upper)
+  )
+
+summ <- merged_df %>% 
+  group_by(method) %>% 
+  summarise(
+    total = n(),
+    n_informative = sum(informative),
+    prop_informative = mean(informative),
+    .groups = "drop"
+  )
+```
+```{r}
+summ %>%
+  gt() %>%
+  tab_header(
+    title = md("**Confidence Interval Informativness**")
+  ) %>%
+  cols_label(
+    method = "Method",
+    total = "Total Estimates",
+    n_informative = "Informative CI (n)",
+    prop_informative = "Informative CI (%)"
+  ) %>%
+  fmt_percent(
+    columns = prop_informative,
+    decimals = 2
+  ) %>%
+  cols_align(
+    align = "center",
+    columns = -method
+  ) %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    cells_body(columns = method)
+  ) %>%
+  opt_stylize(style = 6, color = "blue")
+```
+
 
 ## Number of significant meta-analyses
 
