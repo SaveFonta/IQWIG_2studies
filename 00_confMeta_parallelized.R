@@ -40,7 +40,7 @@
 #'     \item{ci}{Data frame with confidence intervals from all methods}
 #'     \item{p_0}{Named vector of p-values testing null hypothesis}
 #'     \item{width}{Named vector of confidence interval widths}
-#'     \item{tau2}{Heterogeneity variance estimate (Bayesian)}
+#'     \item{heterogeneity}{Data frame with heterogeneity statistics (Q, I2, Tau2 and Tau2 computed with bayesmeta package)}
 #'     \item{significant}{Named logical vector indicating significance}
 #'     \item{aucc_df}{Data frame with AUCC metrics}
 #'     \item{ci_skewness}{Named vector of CI skewness measures}
@@ -690,7 +690,16 @@ get_ma_results <- function(data,
   estimates <- setNames(ci_out$estimate, ci_out$method)
   
   # Tau-squared estimates
-  tau2 <- c("Bayesian" = tau2_bayes)
+  tau2_bayes <- data.frame("Bayesian_tau2" = tau2_bayes)
+  
+  #heterogeneity df (the same for each method, just extract the first)
+  heterogeneity <- cms[[1]]$heterogeneity
+  
+  #add the bayesian tau to the heterogeneity
+  heterogeneity <- cbind(heterogeneity,tau2_bayes) %>%
+    mutate (
+      significant_pval = (p_Q <= (1-level))
+    )
   
   # AUCC data frame
   aucc_df <- ci_out[ci_out$method %in% names(cms), c("method", "aucc", "aucc_ratio")]
@@ -705,7 +714,7 @@ get_ma_results <- function(data,
     ci = ci_out,
     p_0 = p_0,
     width = width,
-    tau2 = tau2,
+    heterogeneity = heterogeneity, 
     significant = significant,
     aucc_df = aucc_df,
     ci_skewness = ci_skewness,

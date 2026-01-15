@@ -49,7 +49,7 @@ remotes::install_github("SaveFonta/confMeta", quiet = TRUE, upgrade = "never")
 load_libraries(
   "confMeta", "bayesmeta", "dplyr", "tibble", "tidyr", 
   "ggplot2", "patchwork", "gt", "parallel", 
-  "ggbeeswarm", "purrr", "ggridges"
+  "ggbeeswarm", "purrr", "ggridges", "ggforce"
 )
 
 # Set global theme for ggplot
@@ -1083,123 +1083,204 @@ sign_long %>%
 
 {{< pagebreak >}}
 
-## Lemma 4.3.1
+## Heterogeneity summary
+Reported here:
+**Cochran's** $Q$The $Q$-statistic. ($\hat{\theta}_{FE}$).$$Q = \sum_{i=1}^{k} w_i (\hat{\theta}_i - \hat{\theta}_{FE})^2$$where $k$ is the number of studies (here $k=2$), and $w_i = 1/\sigma_i^2$. Under the null hypothesis of homogeneity, $Q$ follows a $\chi^2$ distribution with $k-1$ degrees of freedom.
 
-::: {.callout-note icon="false"}
-## Lemma 4.3.1 (Two-study case)
+**Inconsistency Index** ($I^2$)$I^2$ describes the percentage of variation across studies that is due to heterogeneity rather than chance.$$I^2 = \max\left(0, \frac{Q - (k - 1)}{Q}\right) \times 100\%$$
 
-Consider a meta-analysis with exactly two studies, with point estimates $\hat\theta_1, \hat\theta_2$ and standard errors $\sigma_1, \sigma_2 > 0$. Let the confidence level be $1-\alpha$ with $0 < \alpha < 1/4$, and define:
-
-$$
-z_{\alpha/2} := \Phi^{-1}(\alpha/2), \qquad z_{\sqrt{\alpha/4}} := \Phi^{-1}\!\left(\sqrt{\alpha/4}\right)
-$$
-
-where $\Phi^{-1}$ denotes the quantile function of the standard normal distribution. Let $\text{width}_E$ be the width of the $(1-\alpha)$-confidence interval based on the unweighted Edgington method, and $\text{width}_{FE}$ the width of the fixed-effect confidence interval.
-
-Set $\Delta\theta := |\hat\theta_1 - \hat\theta_2|$. If at least one of the following two conditions holds, then $\text{width}_E < \text{width}_{FE}$.
-
-**Condition 1:** $$
-\frac{\max(\sigma_1,\sigma_2)}{\min(\sigma_1,\sigma_2)} \;<\; \sqrt{\left(\frac{z_{\alpha/2}}{z_{\sqrt{\alpha/4}}}\right)^2 - 1}
-$$ and $$
-\Delta\theta \;<\; -\,z_{\sqrt{\alpha/4}}\,\big|\sigma_2 - \sigma_1\big|
-$$
-
-**Condition 2:** $$
--\,z_{\sqrt{\alpha/4}}\,\big|\sigma_2 - \sigma_1\big| \;\le\; \Delta\theta \;<\; \frac{\sigma_1 \sigma_2}{\sqrt{\sigma_1^2 + \sigma_2^2}}\, \big(-2 z_{\alpha/2}\big) \;+\; (\sigma_1 + \sigma_2)\,z_{\sqrt{\alpha/4}}
-$$
-:::
-
+**Between-study Variance** ($\tau^2$) estimated using REML
 ```{r}
-#| label: fig-lemma
-#| fig-height: 8
-
-alpha <- 0.05
-
-# Check lemma conditions
-cis_lemma <- check_lemma_conditions(cis, alpha = alpha)
-
-# Extract and summarize results
-lemma_detailed <- extract_lemma_results(cis_lemma)
 
 
-lemma_applicable <- lemma_detailed %>%
-  filter(applicable == TRUE)
+hetero_df <- bind_rows(
+  lapply(cis, function(x) {
+    x$heterogeneity %>%  
+      as.data.frame() %>% 
+      mutate (
+        MA = x$ma_id,
+        Tau2 = Tau^2
+      ) }
+  )
+) 
 
-# Plot results
-plot_lemma_results(cis_lemma)
-```
-
-```{r}
-#| label: tbl-lemma-summary
-
-# Create simple summary table
-lemma_summary <- lemma_applicable %>%
+summary_hetero <- hetero_df %>% 
   summarise(
-    "Total 2-Study MAs" = n(),
-    "Condition 1 Holds" = sum(condition1_holds, na.rm = TRUE),
-    "Condition 2 Holds" = sum(condition2_holds, na.rm = TRUE),
-    "Both Conditions" = sum(condition1_holds & condition2_holds, na.rm = TRUE),
-    "Neither Condition" = sum(!condition1_holds & !condition2_holds, na.rm = TRUE),
-    "Edgington < FE" = sum(edgington_smaller, na.rm = TRUE),
-    "Lemma Verified" = sum(lemma_verified == TRUE, na.rm = TRUE),
-    "Lemma Failed" = sum(lemma_verified == FALSE, na.rm = TRUE)
-  ) %>%
-  pivot_longer(
-    everything(),
-    names_to = "Metric",
-    values_to = "Count"
-  ) %>%
-  mutate(
-    Percentage = ifelse(
-      Metric == "Total 2-Study MAs",
-      NA_real_,
-      Count / first(Count) * 100
-    )
+    total = n(),
+    n_significant_Q = sum(significant_pval),
+    prop_significant = mean(significant_pval) * 100,
+    avg_I2 = mean(I2),
+    avg_tau = mean(Tau2),
+    .groups = "drop"
   )
 
-# Create table
-lemma_summary %>%
+summary_hetero %>%
   gt() %>%
-  tab_header(
-    title = md("**Lemma 4.3.1 Summary Statistics**"),
+  cols_label(
+    total = "Total MA",
+    n_significant_Q = "Significant Q (n)",
+    prop_significant = "Significant Q (%)",
+    avg_I2 = "Average I2 value",
+    avg_tau = "Average tau value"
   ) %>%
   fmt_number(
-    columns = Count,
-    decimals = 0,
-    use_seps = TRUE
-  ) %>%
-  fmt_number(
-    columns = Percentage,
-    decimals = 1,
-    suffix = "%"
-  ) %>%
-  sub_missing(
-    columns = Percentage,
-    missing_text = "—"
-  ) %>%
-  cols_align(
-    align = "left",
-    columns = Metric
-  ) %>%
-  cols_align(
-    align = "center",
-    columns = c(Count, Percentage)
+    columns = c(prop_significant, avg_I2, avg_tau),
+    decimals = 2
   ) %>%
   tab_style(
     style = cell_text(weight = "bold"),
-    locations = cells_body(rows = Metric == "Total 2-Study MAs")
-  ) %>%
-  tab_style(
-    style = cell_fill(color = "#f0f0f0"),
-    locations = cells_body(rows = Metric == "Total 2-Study MAs")
+    locations = cells_column_labels()
   ) %>%
   opt_stylize(style = 6, color = "blue")
+```
+
+
+
+## Stratified Q statistics
+
+```{r}
+#| label: prep-q-all-methods
+
+# Create a long dataframe with one row per Method per MA
+q_all_methods <- bind_rows(lapply(cis, function(x) {
+  
+  # 1. Extract heterogeneity (Common to all methods in this MA)
+  Q_val <- x$heterogeneity$Q             # -->   would it be better to use I2???
+  
+  # 2. Extract Method-specific metrics
+  methods <- names(x$width)
+  
+  data.frame(
+    MA = x$ma_id,
+    measure = x$measure,
+    Q = Q_val,
+    method = methods,
+    width = as.numeric(x$width),
+    p_value = as.numeric(x$p_0), # P-value for H0: theta=0
+    stringsAsFactors = FALSE
+  )
+}))
 
 ```
 
-{{< pagebreak >}}
 
-# Checking Estimates
+### Q stratified by measure
+Full graph on the above, with a zoomed-in view below due to the outliers that ruin the visualisation.
+```{r}
+#| label: fig-q-dist-measure
+#| fig-height: 6
+
+# We take unique MA rows to avoid counting Q multiple times
+q_unique <- q_all_methods %>% 
+  distinct(MA, .keep_all = TRUE)
+
+
+#use the ggforce package --> facet_zoom allow us to zoom in
+
+ggplot(q_unique, aes(x = Q, y = measure, color = measure)) +
+  geom_boxplot(outlier.shape = NA) + 
+  geom_jitter(height = 0.1, alpha = 0.5) +
+  facet_zoom(xlim = c(0, 20)) + 
+  theme_bw() +
+  theme(legend.position = "none")
+
+```
+
+**IMPORTANT NOTE**, there is a huge outlier, with id "*A20-93 || Abb. 12 || HbA1c*". It has a Q-statistics = 570.95.
+This value prevented the graphs do display corretly and detect pattern, so for the next two plots where Q is involved, I decided to remove it.
+
+### Q vs CI Width
+
+
+```{r}
+#| label: fig-q-vs-width-all
+#| fig-height: 10
+#| fig-width: 10
+
+
+q_all_methods_no_out <- q_all_methods %>% 
+    filter (MA != "A20-93 || Abb. 12 || HbA1c")
+
+
+
+q_all_methods_no_out %>%
+  ggplot(aes(x = Q, y = width)) +
+  geom_point(alpha = 0.2, size = 1, color = "steelblue") +
+  geom_smooth(method = "lm", color = "darkred", se = FALSE) + 
+  facet_wrap(~ method, scales = "free_y") + # Free Y because widths differ by method logic
+  labs(
+    title = "Sensitivity to Heterogeneity: Q vs CI Width",
+    x = "Cochran's Q",
+    y = "CI Width"
+  ) +
+  theme_bw() +
+  theme(strip.background = element_rect(fill = "lightblue"))
+
+```
+
+### Q vs p-values ($H_0: \theta=0$)
+
+```{r}
+#| label: fig-q-vs-pvalue-all
+#| fig-height: 10
+#| fig-width: 10
+
+q_all_methods_no_out %>%
+  ggplot(aes(x = Q, y = p_value)) +
+  geom_point(alpha = 0.2, size = 1, aes(color = p_value < 0.05)) +
+  # Dashed line at 0.05
+  geom_hline(yintercept = 0.05, linetype = "dashed", color = "gray50") +
+  geom_smooth(method = "lm", color = "black", se = FALSE) +
+  facet_wrap(~ method) +
+  scale_color_manual(values = c("gray", "red"), guide = "none") +
+  labs(
+    title = "Impact of Heterogeneity on p values",
+    subtitle = "(Red dots = Significant)",
+    x = "Cochran's Q",
+    y = "P-value"
+  ) +
+  theme_bw() +
+  theme(strip.background = element_rect(fill = "lightblue"))
+```
+
+### Summary table
+To compute the correlations, I am using the MA with problematic Q-value for completeness 
+
+```{r}
+#| label: tbl-q-correlations
+
+q_all_methods %>%
+  group_by(method) %>%
+  summarise(
+    Cor_Q_Width = cor(Q, width, method = "spearman", use = "complete.obs"),
+    Cor_Q_Width_p = cor(Q, width, method = "pearson", use = "complete.obs"),
+    Cor_Q_Pval  = cor(Q, p_value, method = "spearman", use = "complete.obs"),
+    Cor_Q_Pval_p  = cor(Q, p_value, method = "pearson", use = "complete.obs"),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(Cor_Q_Width)) %>%
+  gt() %>%
+  tab_header(
+    title = md("**Correlation with Heterogeneity**"),
+  ) %>%
+  cols_label(
+    method = "Method",
+    Cor_Q_Width = "Corr(Q, Width) Spearman",
+    Cor_Q_Width_p = "Corr(Q, Width) Pearson", 
+    Cor_Q_Pval = "Corr(Q, P-val) Spearman", 
+    Cor_Q_Pval_p  = "Corr(Q, P-val) Pearson"
+  ) %>%
+  fmt_number(columns = starts_with("Cor"), decimals = 3) %>%
+  data_color(
+    columns = starts_with("Cor"),
+    method = "numeric",
+    palette = "RdBu", # Red-Blue diverging palette
+    domain = c(-1, 1)
+  ) %>%
+  opt_stylize(style = 6, color = "blue")
+```
+
+## Checking Estimates
 
 Inspecting the Estimates (which are the point which has the highest p-value) provided by each method
 
@@ -1350,7 +1431,7 @@ summary_vs_FE %>%
 
 ```
 
-## Agreement of sign of Estimates
+### Agreement of sign of Estimates
 
 Comparison of the **direction** of each method’s estimate with the **Fixed Effect** one.
 
@@ -1427,7 +1508,7 @@ summ_long_vs_FE %>%
 
 ```
 
-## Shrinkage ratio
+### Shrinkage ratio
 
 $SR = \frac {\hat{\mu}_{\text{method}}}  {\hat{\mu}_{\text{FE}}}$
 
@@ -1490,3 +1571,120 @@ ratio_summary %>%
   opt_stylize(style = 6, color = "blue") 
 
 ```
+
+# Lemma 4.3.1
+
+::: {.callout-note icon="false"}
+## Lemma 4.3.1 (Two-study case)
+
+Consider a meta-analysis with exactly two studies, with point estimates $\hat\theta_1, \hat\theta_2$ and standard errors $\sigma_1, \sigma_2 > 0$. Let the confidence level be $1-\alpha$ with $0 < \alpha < 1/4$, and define:
+
+$$
+z_{\alpha/2} := \Phi^{-1}(\alpha/2), \qquad z_{\sqrt{\alpha/4}} := \Phi^{-1}\!\left(\sqrt{\alpha/4}\right)
+$$
+
+where $\Phi^{-1}$ denotes the quantile function of the standard normal distribution. Let $\text{width}_E$ be the width of the $(1-\alpha)$-confidence interval based on the unweighted Edgington method, and $\text{width}_{FE}$ the width of the fixed-effect confidence interval.
+
+Set $\Delta\theta := |\hat\theta_1 - \hat\theta_2|$. If at least one of the following two conditions holds, then $\text{width}_E < \text{width}_{FE}$.
+
+**Condition 1:** $$
+\frac{\max(\sigma_1,\sigma_2)}{\min(\sigma_1,\sigma_2)} \;<\; \sqrt{\left(\frac{z_{\alpha/2}}{z_{\sqrt{\alpha/4}}}\right)^2 - 1}
+$$ and $$
+\Delta\theta \;<\; -\,z_{\sqrt{\alpha/4}}\,\big|\sigma_2 - \sigma_1\big|
+$$
+
+**Condition 2:** $$
+-\,z_{\sqrt{\alpha/4}}\,\big|\sigma_2 - \sigma_1\big| \;\le\; \Delta\theta \;<\; \frac{\sigma_1 \sigma_2}{\sqrt{\sigma_1^2 + \sigma_2^2}}\, \big(-2 z_{\alpha/2}\big) \;+\; (\sigma_1 + \sigma_2)\,z_{\sqrt{\alpha/4}}
+$$
+:::
+
+```{r}
+#| label: fig-lemma
+#| fig-height: 8
+
+alpha <- 0.05
+
+# Check lemma conditions
+cis_lemma <- check_lemma_conditions(cis, alpha = alpha)
+
+# Extract and summarize results
+lemma_detailed <- extract_lemma_results(cis_lemma)
+
+
+lemma_applicable <- lemma_detailed %>%
+  filter(applicable == TRUE)
+
+# Plot results
+plot_lemma_results(cis_lemma)
+```
+
+```{r}
+#| label: tbl-lemma-summary
+
+# Create simple summary table
+lemma_summary <- lemma_applicable %>%
+  summarise(
+    "Total 2-Study MAs" = n(),
+    "Condition 1 Holds" = sum(condition1_holds, na.rm = TRUE),
+    "Condition 2 Holds" = sum(condition2_holds, na.rm = TRUE),
+    "Both Conditions" = sum(condition1_holds & condition2_holds, na.rm = TRUE),
+    "Neither Condition" = sum(!condition1_holds & !condition2_holds, na.rm = TRUE),
+    "Edgington < FE" = sum(edgington_smaller, na.rm = TRUE),
+    "Lemma Verified" = sum(lemma_verified == TRUE, na.rm = TRUE),
+    "Lemma Failed" = sum(lemma_verified == FALSE, na.rm = TRUE)
+  ) %>%
+  pivot_longer(
+    everything(),
+    names_to = "Metric",
+    values_to = "Count"
+  ) %>%
+  mutate(
+    Percentage = ifelse(
+      Metric == "Total 2-Study MAs",
+      NA_real_,
+      Count / first(Count) * 100
+    )
+  )
+
+# Create table
+lemma_summary %>%
+  gt() %>%
+  tab_header(
+    title = md("**Lemma 4.3.1 Summary Statistics**"),
+  ) %>%
+  fmt_number(
+    columns = Count,
+    decimals = 0,
+    use_seps = TRUE
+  ) %>%
+  fmt_number(
+    columns = Percentage,
+    decimals = 1,
+    suffix = "%"
+  ) %>%
+  sub_missing(
+    columns = Percentage,
+    missing_text = "—"
+  ) %>%
+  cols_align(
+    align = "left",
+    columns = Metric
+  ) %>%
+  cols_align(
+    align = "center",
+    columns = c(Count, Percentage)
+  ) %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_body(rows = Metric == "Total 2-Study MAs")
+  ) %>%
+  tab_style(
+    style = cell_fill(color = "#f0f0f0"),
+    locations = cells_body(rows = Metric == "Total 2-Study MAs")
+  ) %>%
+  opt_stylize(style = 6, color = "blue")
+
+```
+
+{{< pagebreak >}}
+
