@@ -8,24 +8,46 @@ library(confMeta)
 
 
 # ---- wrapper escalc that handles all cases ---- 
-process_escalc <- function(df, zero_handling = "only0", ...) {
+process_escalc <- function(df, zero_handling = "only0", MH = FALSE, ...) {
   
-  # Ad output columns
+  # Add output columns
   df <- df %>%
     mutate(
-      yi = NA,  #effect size
-      vi = NA,  #variance 
-      sei = NA,  #se
-      data_report = NA # IN which way do they report values? 
+      yi = NA,  # effect size
+      vi = NA,  # variance 
+      sei = NA,  # se
+      data_report = NA  # In which way do they report values?
     )
+  
+  # Add MH-specific columns if in MH mode
+  if (MH) {
+    df <- df %>%
+      mutate(
+        ai = NA,
+        bi = NA,
+        ci = NA,
+        di = NA,
+        n1i = NA,
+        n2i = NA,
+        MH_flag = FALSE  
+      )
+  }
+  
+  #taken from "?rma.mh "
+  #         |  outcome 1  | outcome 2 | total
+  # group 1 |     ai      |    bi     |  n1i
+  # group 2 |     ci      |    di     |  n2i        
+  
+  
+  
   
   # Process row by row to handle each case individually
   for (i in 1:nrow(df)) {
     
-    #Use trycatch just for fun
+    # Use trycatch for error handling
     tryCatch({
       
-      #exctract type of Mass
+      # Extract type of Mass
       mass <- df$Mass[i]
       
       # ======================================================================
@@ -33,11 +55,10 @@ process_escalc <- function(df, zero_handling = "only0", ...) {
       # ======================================================================
       
       # Check if 2x2 table is available
-      
       if (!is.na(df$binaer_ai[i]) & !is.na(df$binaer_ni[i]) & 
           !is.na(df$binaer_ac[i]) & !is.na(df$binaer_nc[i])) {
         
-        #Ecxtract:
+        # Extract:
         ai <- df$binaer_ai[i]
         bi <- df$binaer_ni[i] - df$binaer_ai[i]  # non-events in intervention
         ci <- df$binaer_ac[i]
@@ -46,23 +67,28 @@ process_escalc <- function(df, zero_handling = "only0", ...) {
         n2i <- df$binaer_nc[i]
         
         
-        #Here is the table they use
         
-        # |  outcome 1	| outcome 2 |	total
-        #group 1	|     ai	    !   bi	      !  n1i
-        #group 2	|     ci	    !   di	      !  n2i        
+        if (MH) {
+          # MH mode: store raw table data
+          df$ai[i] <- ai
+          df$bi[i] <- bi
+          df$ci[i] <- ci
+          df$di[i] <- di
+          df$n1i[i] <- n1i
+          df$n2i[i] <- n2i
+          df$MH_flag[i] <- TRUE
+        }
         
-        
-        
-        #NOTE: Escalc gives as output a df of escalc class w/ 2 cols: yi and vi
+        # Always compute effect estimates (for both MH and standard mode)
+        # NOTE: Escalc gives as output a df of escalc class w/ 2 cols: yi and vi
         
         if (mass == "OR") {
           # Odds Ratio
           res <- escalc(measure = "OR", 
                         ai = ai, bi = bi, ci = ci, di = di,
-                        add = 0.5, to = zero_handling) #only0 is the default. Other options: (if0all)
+                        add = 0.5, to = zero_handling)
           
-          #add the values to the df
+          # Add the values to the df
           df$yi[i] <- res$yi
           df$vi[i] <- res$vi
           df$sei[i] <- sqrt(res$vi)
@@ -90,16 +116,17 @@ process_escalc <- function(df, zero_handling = "only0", ...) {
       }
       
       # ======================================================================
-      # DIRECT EFFECT ESTIMATES -> (OR, RR, RD, HR with SE)
+      # DIRECT EFFECT ESTIMATES -> (OR, RR, IDR, ROM, MD, SMD, HR)
       # ======================================================================
       
-      # we arrive here if there the column yi has not been filled from above, and if we have value in effekt_est and effekt_se
+      # We arrive here if the column yi has not been filled from above, 
+      # and if we have value in effekt_est and effekt_se
       
-      if ( (is.na(df$yi[i])) & (!is.na(df$effekt_est[i])) & (!is.na(df$effekt_se[i]))) {    
+      if ((is.na(df$yi[i])) & (!is.na(df$effekt_est[i])) & (!is.na(df$effekt_se[i]))) {    
         
         if (mass %in% c("OR", "OR (effekt)")) {
           # Already log OR
-          res <- escalc(measure = "GEN",  #convert a regular data frame to an ‘escalc’ object for consistency!
+          res <- escalc(measure = "GEN",
                         yi = df$effekt_est[i], 
                         sei = df$effekt_se[i])
           df$yi[i] <- res$yi
@@ -168,7 +195,7 @@ process_escalc <- function(df, zero_handling = "only0", ...) {
           df$data_report[i] <- "direct_SMD"
           
         } else if (mass == "MD") {
-          #easy MD with SE
+          # easy MD with SE
           res <- escalc(measure = "GEN",
                         yi = df$effekt_est[i],
                         sei = df$effekt_se[i])
@@ -183,13 +210,14 @@ process_escalc <- function(df, zero_handling = "only0", ...) {
       # CONTINUOUS OUTCOMES ->  MD with Pooled SD
       # ======================================================================
       
-      # arrive here if we yet dont have an estimate yi, and if those cells with pooled stuff are populated
+      # Arrive here if we yet don't have an estimate yi, and if those cells 
+      # with pooled stuff are populated
       
       if (is.na(df$yi[i]) & 
           !is.na(df$endpunkt_x1_md[i]) & !is.na(df$endpunkt_x1_spool[i]) &
           !is.na(df$endpunkt_x1_n_i[i]) & !is.na(df$endpunkt_x1_n_c[i])) {
         
-        #Exctract
+        # Extract
         md <- df$endpunkt_x1_md[i]
         sd_pool <- df$endpunkt_x1_spool[i]
         n1i <- df$endpunkt_x1_n_i[i]
@@ -197,17 +225,9 @@ process_escalc <- function(df, zero_handling = "only0", ...) {
         
         if (mass == "MD") {
           # Mean Difference with pooled SD
-          # Use the MD measure by providing m1i, m2i (where m2i = 0 since we have the difference)
-          # and both SDs as the pooled SD
-          
-          
-          # Note that we need to do se(theta) = s_pooled (sqrt(1/ni + 1/ nc))
-          #I checked inside escalc and that's exactly what it does, the fact that
-          # we use m2i=0m but doesnt create any problems
-          
           res <- escalc(measure = "MD",
-                        m1i = md, m2i = 0, #
-                        sd1i = sd_pool, sd2i = sd_pool, #vectors with the two sd of the two groups
+                        m1i = md, m2i = 0,
+                        sd1i = sd_pool, sd2i = sd_pool,
                         n1i = n1i, n2i = n2i)
           df$yi[i] <- res$yi
           df$vi[i] <- res$vi
@@ -216,9 +236,6 @@ process_escalc <- function(df, zero_handling = "only0", ...) {
           
         } else if (mass == "SMD") {
           # SMD = MD / pooled_SD
-          # Use SMD measure with constructed means
-          #empirically checked that using m2i = 0 doesnt change results
-          
           res <- escalc(measure = "SMD",
                         m1i = md, m2i = 0,
                         sd1i = sd_pool, sd2i = sd_pool,
@@ -231,18 +248,18 @@ process_escalc <- function(df, zero_handling = "only0", ...) {
       }
       
       # ======================================================================
-      # CONTINUOUS OUTCOMES -> singular_studies_ (it means that we have the means and the se of each group)
-      #    
+      # CONTINUOUS OUTCOMES -> singular_studies_
       # ======================================================================
       
-      # Yet we dont have an estimate, and those columns are populated
+      # Yet we don't have an estimate, and those columns are populated
+      
       if (is.na(df$yi[i]) &
           !is.na(df$stetig_mittel_i[i]) & !is.na(df$stetig_sd_i[i]) & 
           !is.na(df$stetig_n_i[i]) &
           !is.na(df$stetig_mittel_c[i]) & !is.na(df$stetig_sd_c[i]) & 
           !is.na(df$stetig_n_c[i])) {
         
-        #Extract
+        # Extract
         m1i <- df$stetig_mittel_i[i]
         sd1i <- df$stetig_sd_i[i]
         n1i <- df$stetig_n_i[i]
@@ -273,12 +290,14 @@ process_escalc <- function(df, zero_handling = "only0", ...) {
       }
       
     }, error = function(e) {
-      warning(paste0("Error processing row", i, ":", e$message))
+      warning(paste0("Error processing row ", i, ": ", e$message))
       df$data_report[i] <- "ERROR"
     })
   }
   
-  
+  # Prepare output
+  base_cols <- c("no", "identifier", "study", "logEst", "selogEst", 
+                 "data_report", "effect.measure", "sheet_name")
   
   out <- df %>% 
     mutate(
@@ -287,16 +306,24 @@ process_escalc <- function(df, zero_handling = "only0", ...) {
       effect.measure = Mass,
       study = Studie,
       identifier = MA_id
-    ) %>% 
-    select(no, identifier, study, logEst, selogEst, data_report, effect.measure, sheet_name)
+    )
   
-  
+  if (MH) {
+    # MH mode: include both standard columns and MH-specific columns
+    out <- out %>%
+      select(all_of(base_cols), ai, bi, ci, di, n1i, n2i, MH_flag)
+  } else {
+    # Standard mode: only include standard columns
+    out <- out %>%
+      select(all_of(base_cols))
+  }
   
   message(
     paste0("Data processed with ", 
            sum(is.na(out$data_report)), 
-           " values that were not suitable for computing \n")
+           " values that were not suitable for computing\n")
   )
+  
   return(out)
 }
 

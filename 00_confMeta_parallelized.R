@@ -127,6 +127,7 @@ confMeta.full <- function(data,
                    additional_info1_col = "data_report",
                    additional_info2_col = "sheet_name",
                    sign_threshold = 0,
+                   MH = FALSE,
                    ...) {
   
   if (!is.numeric(data[[ma_id_col_num]])) {
@@ -163,10 +164,22 @@ confMeta.full <- function(data,
   
   # ---- Prepare Data  ----
   
-  
+     
   # Subset to only needed columns
-  df <- data[, required_cols, drop = FALSE]
-  
+  if (MH == TRUE) {
+    MH_cols <- c("ai", "bi", "ci", "di", "n1i", "n2i", "MH_flag")
+    
+    # Check if MH columns exist
+    missing_MH_cols <- setdiff(MH_cols, names(data))
+    if (length(missing_MH_cols) > 0) {
+      stop("When MH = TRUE, the following columns are required: ", 
+           paste(missing_MH_cols, collapse = ", "))
+    }
+    
+    df <- data[, c(required_cols, MH_cols), drop = FALSE]
+  } else {
+    df <- data[, required_cols, drop = FALSE]
+  }
   
   # Get unique meta-analysis IDs and names
   ids <- unique(df[[ma_id_col]])
@@ -205,7 +218,7 @@ confMeta.full <- function(data,
     }
   }
   
-  
+
   
   # ---- Parallel process ----
   # Choose processing method
@@ -225,9 +238,11 @@ confMeta.full <- function(data,
       est_col = est_col, 
       se_col = se_col,
       study = study,
+      sign_threshold=sign_threshold,
       effect.measure = effect.measure,
       additional_info1_col = additional_info1_col,
       additional_info2_col = additional_info2_col,
+      MH = MH,
       ...
     )
   } else {
@@ -243,9 +258,11 @@ confMeta.full <- function(data,
         est_col = est_col, 
         se_col = se_col,
         study = study,
+        sign_threshold= sign_threshold, 
         effect.measure = effect.measure,
         additional_info1_col = additional_info1_col,
         additional_info2_col = additional_info2_col,
+        MH = MH,
         ...
       )
     } else {
@@ -259,9 +276,11 @@ confMeta.full <- function(data,
         est_col = est_col, 
         se_col = se_col,
         study = study,
+        sign_threshold= sign_threshold,
         effect.measure = effect.measure,
         additional_info1_col = additional_info1_col,
         additional_info2_col = additional_info2_col,
+        MH = MH,
         ...
       )
     }
@@ -320,7 +339,7 @@ confMeta.full <- function(data,
 
 process_single_ma <- function(id, df, id_col_name, n0, est_col, se_col, level, study, effect.measure,
                               additional_info1_col = NULL, 
-                              additional_info2_col = NULL, sign_threshold = 0,
+                              additional_info2_col = NULL, sign_threshold = 0, MH = FALSE,
                               ...) {
   # Subset data just from this meta-analysis
   subset_data <- df[df[[id_col_name]] == id, , drop = FALSE]
@@ -338,8 +357,6 @@ process_single_ma <- function(id, df, id_col_name, n0, est_col, se_col, level, s
     stop("Non-unique ", n0, " within ma_id=", id)
   }
   n0_unique <- n0_unique[[1]]
-  
-  
   
   #Build additional_info sublist 
   add <- list() #this will be the list we add inside each MA
@@ -361,6 +378,13 @@ process_single_ma <- function(id, df, id_col_name, n0, est_col, se_col, level, s
   additional_info <- if (length(add) > 0L) add else NULL
   
   
+  #check if this line has TRUE in MH
+
+  if (isTRUE(MH) &&
+      "MH_flag" %in% names(subset_data) &&
+      identical(subset_data$MH_flag[1], FALSE)) {
+    MH <- FALSE
+  } #assuming escalc doing a good job 
   
   # Run analysis with error handling
   tryCatch(
@@ -374,6 +398,8 @@ process_single_ma <- function(id, df, id_col_name, n0, est_col, se_col, level, s
                      additional_info = additional_info,
                      ma_id = id,
                      ma_id_number = n0_unique,
+                     sign_threshold= sign_threshold,
+                     MH = MH,
                      ...)
     },
     error = function(e) {
@@ -501,6 +527,7 @@ get_ma_results <- function(data,
                            tau_prior_scale_or = 0.2,
                            tau_prior_scale_smd = 0.3,
                            sign_threshold = 0,
+                           MH = FALSE, 
                            ...) {
   
   # ---- Take values ----
@@ -545,32 +572,80 @@ get_ma_results <- function(data,
     list(name = "Edgington (1/SE^2)", fun = p_edg_w2, w = w_inv_se2)
   )
   
-
-  # ---- Run confMeta for Each Method ----
-
-  cms <- lapply(methods, function(mdef) {
-    confMeta(
-      estimates = estimates,
-      SEs = SEs,
-      w = mdef$w,
-      study_names = study_names,
-      fun = mdef$fun,
-      fun_name = mdef$name,
-      conf_level = conf_level
+  # create 2x2 table (df)
+  # create 2x2 table (df)
+  if (MH == TRUE) {
+    # Check required columns
+    MH_cols <- c("ai", "bi", "ci", "di", "n1i", "n2i")
+    missing_cols <- setdiff(MH_cols, names(data))
+    if (length(missing_cols) > 0) {
+      stop("When MH = TRUE, the following columns are required: ", 
+           paste(missing_cols, collapse = ", "))
+    }
+    
+    table_2x2 <- data.frame(
+      ai  = data[["ai"]],
+      bi  = data[["bi"]],
+      ci  = data[["ci"]],
+      di  = data[["di"]],
+      n1i = data[["n1i"]],
+      n2i = data[["n2i"]]
     )
-  })
+    
+    # Validate values ì
+    if (any(table_2x2 < 0, na.rm = TRUE)) {
+      stop("2x2 table values must be non-negative")
+    }
+  } else {
+    table_2x2 <- NULL  # Explicitly set to NULL when not used
+  }
+    
+  
+  # ---- Run confMeta for Each Method ----
+  if (MH == TRUE){
+    cms <- lapply(methods, function(mdef) {
+      confMeta(
+        estimates = estimates,
+        SEs = SEs,
+        w = mdef$w,
+        study_names = study_names,
+        fun = mdef$fun,
+        fun_name = mdef$name,
+        conf_level = conf_level,
+        MH = TRUE,
+        table_2x2 = table_2x2, 
+        measure = meas,
+        ...
+      )
+    })
+  } else {
+    cms <- lapply(methods, function(mdef) {
+      confMeta(
+        estimates = estimates,
+        SEs = SEs,
+        w = mdef$w,
+        study_names = study_names,
+        fun = mdef$fun,
+        fun_name = mdef$name,
+        conf_level = conf_level,
+        ...
+      )
+    })
+  }
+  
   names(cms) <- vapply(methods, `[[`, character(1L), "name")
   
+
   # ---- Extract Confidence Intervals ----
   
-  #Extract individual cis, we just need to exctract them from a random method since they are all the same
-  ci_individual <- as.data.frame( cms[[1]][["individual_cis"]] ) 
+  #Extract individual cis, extract it from Edgington(but same for every method)
+  ci_individual <- as.data.frame( cms[["Edgington"]][["individual_cis"]] ) 
 
   
   ci_individual <- ci_individual %>% 
     mutate (
       width = upper - lower,
-      significant = !(lower < sign_threshold & upper > sign_threshold)
+      significant = !(lower <= sign_threshold & upper >= sign_threshold)
     )
 
   
@@ -580,14 +655,14 @@ get_ma_results <- function(data,
   
   # Extract comparison CIs (fixed effects, HK, etc.)
   ci_comparison <- lapply(
-    seq_len(nrow(cms[[1]]$comparison_cis)), #extract it just fromt he first edgignton object, they are the same 
+    seq_len(nrow(cms[["Edgington"]]$comparison_cis)), #extract it just from the Edgington! Important if use MH = TRUE
     function(x) {
-      out <- cms[[1]]$comparison_cis[x, , drop = FALSE]
+      out <- cms[["Edgington"]]$comparison_cis[x, , drop = FALSE]
       rownames(out) <- NULL
       out
     }
   )
-  names(ci_comparison) <- rownames(cms[[1]]$comparison_cis)
+  names(ci_comparison) <- rownames(cms[["Edgington"]]$comparison_cis)
   
   # Combine all CIs
   ci_all <- append(ci_new, ci_comparison)
@@ -768,7 +843,7 @@ get_ma_results <- function(data,
       lower       = lower,
       upper       = upper,
       width       = upper - lower,
-      significant = !(lower < sign_threshold & upper > sign_threshold),
+      significant = !(lower <= sign_threshold & upper >= sign_threshold),
       stringsAsFactors = FALSE
     )
   })
@@ -787,7 +862,7 @@ get_ma_results <- function(data,
 .add_p_values <- function(ci_df, cms, methods_to_exclude) {
   # Extract p-values from confMeta objects
   p_0_new <- vapply(cms, function(x) x[["p_0"]][, "y"], double(1L))
-  p_0_old <- cms[[1]][["comparison_p_0"]][, "y"]
+  p_0_old <- cms[["Edgington"]][["comparison_p_0"]][, "y"]
   p_0 <- c(p_0_new, p_0_old)
   
   # Remove unwanted methods
@@ -867,7 +942,7 @@ get_ma_results <- function(data,
 #' @keywords internal
 #' @noRd
 .run_bayesian_analysis <- function(estimates, SEs, meas, 
-                                   tau_prior_scale_rr, tau_prior_scale_or,tau_prior_scale_smd, point_estimate = "median", sign_threshold = sign_threshold) {
+                                   tau_prior_scale_rr, tau_prior_scale_or,tau_prior_scale_smd, point_estimate = "median", sign_threshold = 0) {
   # Set prior based on effect measure
   # Note: for two studies, they dont suggest to use this
   tau_prior <- if (meas == "RR" | meas == "HR") {
@@ -895,7 +970,7 @@ get_ma_results <- function(data,
   
   # Calculate derived metrics
   bm_width <- bm_upper - bm_lower
-  bm_significant <- !(sign_threshold > bm_lower & sign_threshold < bm_upper)
+  bm_significant <- !(sign_threshold >= bm_lower & sign_threshold <= bm_upper)
   bm_ci_skewness <- (bm_upper + bm_lower - 2 * bm_est) / (bm_upper - bm_lower)
   
   # Create row for ci_out
@@ -933,7 +1008,3 @@ get_ma_results <- function(data,
   den <- (sum(w * (est - theta_bar)^2)^(3/2)) / sqrt(sum(w))
   num / den
 }
-
-
-
-
