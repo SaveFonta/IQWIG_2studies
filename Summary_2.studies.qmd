@@ -32,7 +32,7 @@ load_libraries <- function(...) {
   for (pkg in pkgs) {
     if (!require(pkg, character.only = TRUE, quietly = TRUE)) {
       
-      # 3. Se non c'è (FALSE), installalo e poi caricalo
+      # If not there (FALSE), install and then load it
       install.packages(pkg)
       library(pkg, character.only = TRUE, quietly = TRUE)
     }
@@ -43,7 +43,9 @@ load_libraries <- function(...) {
 if (!requireNamespace("remotes", quietly = TRUE)) {
   install.packages("remotes")
 }
-remotes::install_github("SaveFonta/confMeta", quiet = TRUE, upgrade = "never")
+if (!requireNamespace("confMeta", quietly = TRUE)) {
+  remotes::install_github("SaveFonta/confMeta", upgrade = "never")
+}
 
 # Load all libraries
 load_libraries(
@@ -115,7 +117,7 @@ df_estimates %>%
 
 ## Data formatting
 
-Another interesting fact was the way IQWIG reported the raw data. I classified them in 13 possible ways. This also show us which are the most common ways of reporting Meta Anslysis.
+Another interesting fact was the way IQWIG reported the raw data. I classified them in 15 possible ways. This also show us which are the most common ways of reporting Meta Anslysis.
 
 -   **2x2 OR**: Binary outcome reported as a 2×2 event table (a,b,c,d); effect computed as log odds ratio from counts.
 
@@ -123,17 +125,17 @@ Another interesting fact was the way IQWIG reported the raw data. I classified t
 
 -   **2x2 RD**: Binary outcome reported as a 2×2 event table; effect computed as risk difference from counts.
 
--   **HR**: Study reports the hazard ratio (or log-HR) with its standard error directly.
+-   **HR**: Study reports the log-Hazard Ratio with its standard error directly.
 
--   **direct OR**: Study reports the odds ratio (or log-OR) with its standard error directly.
+-   **direct OR**: Study reports the log-Odd Ratio with its standard error directly.
 
--   **direct RR**: Study reports the risk ratio (or log-RR) with its standard error directly.
+-   **direct RR**: Study reports the  log-Risk Ratio with its standard error directly.
 
 -   **direct RD**: Study reports the risk difference with its standard error directly.
 
--   **ROM**: Study reports the ratio of means (typically on the log scale) with its standard error directly.
+-   **ROM**: Study reports the ratio of means on the log scale with its standard error directly.
 
--   **IDR**: Study reports the incidence density rate ratio (typically on the log scale) with its standard error directly.
+-   **IDR**: Study reports the incidence density rate ratio on the log scale with its standard error directly.
 
 -   **direct SMD**: Study reports the standardized mean difference with its standard error directly.
 
@@ -162,7 +164,8 @@ df_estimates %>%
 
 # Summary measures
 
-This summary is computed using all the MA from above.
+This summary is computed using all the MA from above.   \\
+**Scale** All ratio-based metrics (OR, RR, HR, etc.) are analyzed on the logarithmic scale. However, to remain consistent with IQWiG reporting conventions, they are labeled using their original metric names.
 
 
 ## Width of the confidence intervals
@@ -180,7 +183,6 @@ width_summary <- widths %>%
   group_by(method) %>%
   summarise(
     mean = mean(width, na.rm = TRUE),
-    sd = sd(width, na.rm = TRUE),
     median = median(width, na.rm = TRUE),
     q25 = quantile(width, 0.25, na.rm = TRUE),
     q75 = quantile(width, 0.75, na.rm = TRUE),
@@ -198,7 +200,6 @@ width_summary %>%
   cols_label(
     method = "Method",
     mean = "Mean",
-    sd = "SD",
     median = "Median",
     q25 = "Q25",
     q75 = "Q75",
@@ -206,7 +207,7 @@ width_summary %>%
     max = "Max"
   ) %>%
   fmt_number(
-    columns = c(mean, sd, median, q25, q75, min, max),
+    columns = c(mean, median, q25, q75, min, max),
     decimals = 2
   ) %>%
   cols_align(
@@ -226,33 +227,33 @@ width_summary %>%
 
 Widths stratified by effect measure
 ```{r}
-# Extract widths
-widths <- extract_ma_metric(cis, "width")
 
-# Calculate summary statistics stratified by effect.measure and method
 width_summary <- widths %>%
-  group_by(measure, method) %>%
+  group_by(measure) %>%
+  # Count unique meta-analyses in each measure group
+  mutate(n_ma = n_distinct(MA)) %>% 
+  group_by(measure, method, n_ma) %>%
   summarise(
     mean = mean(width),
-    sd = sd(width),
     median = median(width),
     q25 = quantile(width, 0.25),
     q75 = quantile(width, 0.75),
     min = min(width),
     max = max(width),
     .groups = "drop"
-  )
+  ) %>%
+  mutate(measure = paste0(measure, " (N = ", n_ma, ")")) #Append the count to the measure name for the gt group header
 
-# Create table
+#gt table
 width_summary %>%
   gt(groupname_col = "measure") %>%
   tab_header(
     title = md("**Confidence Interval Widths by Effect Measure and Method**"),
   ) %>%
+  cols_hide(columns = n_ma) %>% 
   cols_label(
     method = "Method",
     mean = "Mean",
-    sd = "SD",
     median = "Median",
     q25 = "Q25",
     q75 = "Q75",
@@ -260,7 +261,7 @@ width_summary %>%
     max = "Max"
   ) %>%
   fmt_number(
-    columns = c(mean, sd, median, q25, q75, min, max),
+    columns = c(mean, median, q25, q75, min, max),
     decimals = 2
   ) %>%
   cols_align(
@@ -272,29 +273,44 @@ width_summary %>%
     locations = cells_column_labels()
   ) %>%
   opt_stylize(style = 6, color = "blue")
-
 ```
 
-For a better plotting, I removed the HK 
+For a better plotting, I removed the HK and also I am not plotting ROM and RD, since they only have respectively 1 and 6 observations.
+
+**Note** that MD and SMD are plotted on the square root scale
 
 ```{r}
+#| label: fig-ci-widths_facet
+#| fig-width: 20
+#| fig-height: 15
+#| fig-dpi: 300
+
 widths_noHK <- widths %>% 
-  filter (method != "Hartung & Knapp")
+  filter (method != "Hartung & Knapp") %>% 
+  filter (measure != "ROM" & measure != "RD")
 
 ggplot(widths_noHK, aes(x = method, y = width, fill = method)) +
   geom_boxplot(alpha = 0.7) +
   facet_wrap(~ measure, scales = "free_y") +
   labs(
-    title = "Distribution of Confidence Interval Widths",
-    subtitle = "By Effect Measure and Method",
+    title = "Distribution of Confidence Interval Widths Stratified by measure",
     x = "Method",
     y = "CI Width"
   ) +
+    ggh4x::facetted_pos_scales(
+    y = measure %in% c("SMD", "MD") ~ scale_y_sqrt()
+  ) + 
   theme_bw() +
   theme(
-    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title   = element_text(face = "bold", size = 20),
+    strip.text   = element_text(face = "bold", size = 16),
+    axis.title.x = element_text(size = 16),
+    axis.title.y = element_text(size = 16),
+    axis.text.x  = element_text(angle = 45, hjust = 1, size = 13),
+    axis.text.y  = element_text(size = 13),
+    legend.title = element_text(size = 14),
+    legend.text  = element_text(size = 13),
     legend.position = "bottom",
-    plot.title = element_text(face = "bold", size = 14),
     strip.background = element_rect(fill = "lightblue")
   ) +
   scale_fill_brewer(palette = "Set2")
@@ -304,6 +320,7 @@ ggplot(widths_noHK, aes(x = method, y = width, fill = method)) +
 
 The skewness of each confidence interval is computed as:
 
+Of course Fixed Effect mehods cannot be skewed so we don't report them. 
 $$
 \text{Skewness} = \frac{\text{upper} + \text{lower} - 2 \times \text{estimate}}{\text{upper} - \text{lower}}
 $$
@@ -360,7 +377,7 @@ ci_skewness %>%
 
 ## Summary of Confidence Interval
 
-How many individual study estimates fall outside their respective meta-analytic confidence intervals?
+How many **individual** study estimates fall outside their respective meta-analytic confidence intervals?
 
 **Definitions:**
 
@@ -369,7 +386,7 @@ How many individual study estimates fall outside their respective meta-analytic 
 3.  **Outside CI (%):** Percentage of estimates falling outside the CI
 
 ```{r}
-#| label: coverage-analysis
+#| label: included-analysis
 
 # Prepare data frames
 ma_ci_df <- bind_rows(
@@ -400,7 +417,7 @@ input_df <- bind_rows(
         input_lower = lower,
         input_upper = upper,
         input_width = width,
-        input_significant = significant, 
+        input_significant = significant 
       ) %>% 
       select (-c(estimate, SE, lower, upper, width, significant))
   }))
@@ -414,7 +431,7 @@ merged_df <- merged_df %>%
   )
 
 # Calculate summary statistics
-coverage_summary <- merged_df %>%
+included_summary <- merged_df %>%
   group_by(method) %>%
   summarise(
     n_estimates_total = n(),
@@ -425,9 +442,9 @@ coverage_summary <- merged_df %>%
 ```
 
 ```{r}
-#| label: tbl-coverage
+#| label: tbl-included
 
-coverage_summary %>%
+included_summary %>%
   gt() %>%
   tab_header(
     title = md("**Confidence Interval Analysis**")
@@ -455,7 +472,7 @@ coverage_summary %>%
     columns = prop_outside,
     method = "numeric",
     palette = c("#ffffff", "#ffe5e5", "#ffcccc", "#ff9999"),
-    domain = c(0, max(coverage_summary$prop_outside))
+    domain = c(0, max(included_summary$prop_outside))
   ) %>%
   tab_style(
     style = cell_text(weight = "bold"),
@@ -547,7 +564,7 @@ summ %>%
 ## Number of significant meta-analyses
 
 Proportion of significant *meta-analyses* by method (i.e. with intervals excluding 0).
-
+There is a visual bug on the y axis labels, will fix it in the next days 
 ```{r}
 #| label: fig-significance
 #| fig-height: 8
@@ -829,7 +846,7 @@ pvals_diff %>%
 
 ### Agreement in Significance (p \< 0.05)
 
-Here we inspect the significance agreement between the values
+Here we inspect the significance agreement between the values at a $\alpha = 0.05$ level
 
 Each meta-analysis is classified into **four categories:** both significant, both non-significant, FE-only, or method-only.
 
@@ -907,7 +924,7 @@ sign_agree_p %>%
     both_sig = "Both Sig",
     both_nonsig = "Both Non-sig",
     fe_only = "FE Only",
-    method_only = "Method Only",
+    method_only = "Method Only"
   ) %>%
   fmt_number(
     columns = c(n_total, both_sig, both_nonsig, fe_only, method_only),
@@ -1084,10 +1101,11 @@ sign_long %>%
 {{< pagebreak >}}
 
 ## Heterogeneity summary
-Reported here:
-**Cochran's** $Q$The $Q$-statistic. ($\hat{\theta}_{FE}$).$$Q = \sum_{i=1}^{k} w_i (\hat{\theta}_i - \hat{\theta}_{FE})^2$$where $k$ is the number of studies (here $k=2$), and $w_i = 1/\sigma_i^2$. Under the null hypothesis of homogeneity, $Q$ follows a $\chi^2$ distribution with $k-1$ degrees of freedom.
+**Cochran's** $Q$
+$$Q = \sum_{i=1}^{k} w_i (\hat{\theta}_i - \hat{\theta}_{FE})^2$$where $k$ is the number of studies (here $k=2$), and $w_i = 1/\sigma_i^2$. Under the null hypothesis of homogeneity, $Q$ follows a $\chi^2$ distribution with $k-1$ degrees of freedom.
 
-**Inconsistency Index** ($I^2$)$I^2$ describes the percentage of variation across studies that is due to heterogeneity rather than chance.$$I^2 = \max\left(0, \frac{Q - (k - 1)}{Q}\right) \times 100\%$$
+**Inconsistency Index** ($I^2$)
+Describes the percentage of variation across studies that is due to heterogeneity rather than chance.$$I^2 = \max\left(0, \frac{Q - (k - 1)}{Q}\right) \times 100\%$$
 
 **Between-study Variance** ($\tau^2$) estimated using REML
 ```{r}
@@ -1165,7 +1183,8 @@ q_all_methods <- bind_rows(lapply(cis, function(x) {
 
 
 ### Q stratified by measure
-Full graph on the above, with a zoomed-in view below due to the outliers that ruin the visualisation.
+Full graph on the above, with a zoomed-in view below due to the outliers that ruin the visualisation. 
+Data are reported on the square root scale.
 ```{r}
 #| label: fig-q-dist-measure
 #| fig-height: 6
@@ -1177,74 +1196,78 @@ q_unique <- q_all_methods %>%
 
 #use the ggforce package --> facet_zoom allow us to zoom in
 
+
 ggplot(q_unique, aes(x = Q, y = measure, color = measure)) +
-  geom_boxplot(outlier.shape = NA) + 
-  geom_jitter(height = 0.1, alpha = 0.5) +
-  facet_zoom(xlim = c(0, 20)) + 
+  geom_boxplot(outlier.shape = NA, width = 0.5, alpha = 0.5) + 
+  geom_jitter(height = 0.1, alpha = 0.5, size = 1) +
+  
+  scale_x_sqrt(
+    breaks = c(0, 10, 50, 100, 200, 500), 
+    name = "Cochran's Q (Scale sqrt)"
+  ) +
+  
+  # Note: xlim in facet_zoom must use original Q values 
+  facet_zoom(xlim = c(0, 20), zoom.size = 1) + 
+  
   theme_bw() +
-  theme(legend.position = "none")
+  theme(
+    legend.position = "none" 
+  )
 
 ```
 
 **IMPORTANT NOTE**, there is a huge outlier, with id "*A20-93 || Abb. 12 || HbA1c*". It has a Q-statistics = 570.95.
-This value prevented the graphs do display corretly and detect pattern, so for the next two plots where Q is involved, I decided to remove it.
+This value prevented the graphs do display correctly and detect pattern, so for the next two plots where Q is involved, I decided to remove it.
 
 ### Q vs CI Width
 
+On the right, all methods are plotted together, on the right, to better inspection, the HK method is removed. 
 
 ```{r}
-#| label: fig-q-vs-width-all
-#| fig-height: 10
-#| fig-width: 10
-
+#| label: fig-q-vs-width-combined
+#| fig-height: 15
+#| fig-width: 20
 
 q_all_methods_no_out <- q_all_methods %>% 
     filter (MA != "A20-93 || Abb. 12 || HbA1c")
 
 
+data_with_HK <- q_all_methods_no_out %>% 
+  mutate(panel = "All Methods (Including HK)")
 
-q_all_methods_no_out %>%
-  ggplot(aes(x = Q, y = width)) +
-  geom_point(alpha = 0.2, size = 1, color = "steelblue") +
-  geom_smooth(method = "lm", color = "darkred", se = FALSE) + 
-  facet_wrap(~ method, scales = "free_y") + # Free Y because widths differ by method logic
+data_no_HK <- q_all_methods_no_out %>% 
+  filter(method != "Hartung & Knapp") %>% 
+  mutate(panel = "Excluding Hartung & Knapp")
+
+#merge
+plot_data_combined <- bind_rows(data_with_HK, data_no_HK) %>% 
+  mutate(panel = factor(panel, levels = c("All Methods (Including HK)", "Excluding Hartung & Knapp")))
+
+ggplot(plot_data_combined, aes(x = Q, y = width, color = method)) +
+  geom_smooth(formula = y ~ x,  method = "loess", se = FALSE) +
+  facet_wrap(~panel, scales = "free_y") + #important free_y
   labs(
-    title = "Sensitivity to Heterogeneity: Q vs CI Width",
     x = "Cochran's Q",
-    y = "CI Width"
+    y = "CI Width",
+    color = "Method"
   ) +
   theme_bw() +
-  theme(strip.background = element_rect(fill = "lightblue"))
+  theme(
+    strip.background = element_rect(fill = "lightblue"),
+    strip.text = element_text(face = "bold", size = 30),
+    axis.title.x = element_text(size = 25), 
+    axis.title.y = element_text(size = 25), 
+    axis.text.x  = element_text(size = 20), 
+    axis.text.y  = element_text(size = 20),     
+    legend.position = "bottom",
+    legend.title = element_text(size = 25), 
+    legend.text  = element_text(size = 25)  
+    )
 
-```
-
-### Q vs p-values ($H_0: \theta=0$)
-
-```{r}
-#| label: fig-q-vs-pvalue-all
-#| fig-height: 10
-#| fig-width: 10
-
-q_all_methods_no_out %>%
-  ggplot(aes(x = Q, y = p_value)) +
-  geom_point(alpha = 0.2, size = 1, aes(color = p_value < 0.05)) +
-  # Dashed line at 0.05
-  geom_hline(yintercept = 0.05, linetype = "dashed", color = "gray50") +
-  geom_smooth(method = "lm", color = "black", se = FALSE) +
-  facet_wrap(~ method) +
-  scale_color_manual(values = c("gray", "red"), guide = "none") +
-  labs(
-    title = "Impact of Heterogeneity on p values",
-    subtitle = "(Red dots = Significant)",
-    x = "Cochran's Q",
-    y = "P-value"
-  ) +
-  theme_bw() +
-  theme(strip.background = element_rect(fill = "lightblue"))
 ```
 
 ### Summary table
-To compute the correlations, I am using the MA with problematic Q-value for completeness 
+To compute the correlations, I am also using the MA with extreme Q-value for completeness 
 
 ```{r}
 #| label: tbl-q-correlations
@@ -1280,9 +1303,212 @@ q_all_methods %>%
   opt_stylize(style = 6, color = "blue")
 ```
 
+## Relative Width Increase
+
+$$
+\frac{\text{Width}_{\text{Method}} - \text{Width}_{\text{FE}}}{\text{Width}_{\text{FE}}} 
+$$
+
+Basically, we are measuring how much the interval is increasing with respect to FE. 
+
+
+We plot this increase against Cochran's $Q$ to show how methods respond to heterogeneity. A positive value indicates a penalty for heterogeneity: as the study estimates diverge, the method produces a wider (more conservative) interval.
+
+
+
+
+```{r}
+fe_widths <- q_all_methods %>%
+  filter(method == "Fixed effect") %>%
+  select(MA, width_fe = width)
+
+q_relative <- q_all_methods %>%
+  left_join(fe_widths, by = "MA") %>%
+  mutate(
+    rel_width_increase = (width - width_fe) / width_fe
+  )
+```
+
+
+```{r}
+#| label: fig-q-vs-rel-width-combined
+#| fig-height: 15
+#| fig-width: 20
+
+#add the panels
+data_all <- q_relative %>% 
+  mutate(panel = "All Methods (Including HK)")
+
+data_no_hk <- q_relative %>% 
+  filter(method != "Hartung & Knapp") %>% 
+  mutate(panel = "Excluding Hartung & Knapp")
+
+#same as above
+combined_data <- bind_rows(data_all, data_no_hk) %>%
+  mutate(panel = factor(panel, levels = c("All Methods (Including HK)", "Excluding Hartung & Knapp")))
+
+ggplot(combined_data, aes(x = Q, y = rel_width_increase, color = method)) +
+  geom_smooth(formula = y ~ x, method = "loess", se = FALSE, linewidth = 1.2) + 
+  
+  facet_wrap(~panel, scales = "free_y") +
+  
+  scale_x_sqrt(
+    breaks = c(0, 10, 50, 100, 200, 400),
+    name = "Cochran's Q (sqrt scale)"
+  ) +
+  scale_y_continuous(labels = scales::percent, name = "Relative Width Increase vs FE") +
+  theme_bw() +
+  theme(
+    strip.background = element_rect(fill = "lightblue"),
+    strip.text = element_text(face = "bold", size = 30),
+    axis.title.x = element_text(size = 25), 
+    axis.title.y = element_text(size = 25), 
+    axis.text.x  = element_text(size = 20), 
+    axis.text.y  = element_text(size = 20),     
+    legend.position = "bottom",
+    legend.title = element_text(size = 25), 
+    legend.text  = element_text(size = 25)  
+  )
+```
+
+
+```{r}
+#| label: tbl-relative-width-summary
+
+
+summary_tab <- q_relative %>%
+ filter (method != "Fixed effect") %>% 
+  group_by(method) %>%
+  summarise(
+    Mean_Increase = mean(rel_width_increase, na.rm = TRUE),
+    Median_Increase = median(rel_width_increase, na.rm = TRUE),
+    cor_spear = cor(Q, rel_width_increase, method = "spearman"),
+    cor_pear = cor(Q, rel_width_increase, method = "pearson"),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(Mean_Increase))
+
+summary_tab %>%
+  gt() %>%
+  tab_header(
+    title = md("**Performance vs Fixed Effect**")
+  ) %>%
+  cols_label(
+    method = "Method",
+    Mean_Increase = "Mean % Increase",
+    Median_Increase = "Median % Increase",
+    cor_spear = "Corr(Q, Increase)[Spearman]", 
+    cor_pear = "Corr(Q, Increase)[Pearson]"
+  ) %>%
+  fmt_percent(
+    columns = c(Mean_Increase, Median_Increase),
+    decimals = 1
+  ) %>%
+  fmt_number(
+    columns = c(cor_spear, cor_pear),
+    decimals = 3
+  ) %>%
+  data_color(
+    columns = Mean_Increase,
+    method = "numeric",
+    palette = "Reds" 
+  ) %>%
+  data_color(
+    columns = c(cor_spear, cor_pear),
+    method = "numeric",
+    palette = "Blues",
+    domain = c(0, 1) 
+  ) %>%
+  opt_stylize(style = 6, color = "blue")
+```
+
+
+### Relative width increase stratified by measure
+Now let's do the same inspection stratified by measure. 
+*Note*: we don't plot ROM, RD and IDR since respectively only 1,6,8 Meta-analysis use those measures. 
+
+Also here we exclude the HK method. 
+```{r}
+
+#remove ROM, RD and IDR 
+data_clean <- data_no_hk %>% 
+  filter(measure != "ROM" & measure != "RD" & measure != "IDR")
+
+ggplot(data_clean, aes(x = Q, y = rel_width_increase, color = method)) +
+    geom_smooth(formula = y ~ x, method = "loess", se = FALSE, linewidth = 1.2) +
+    facet_wrap(~ measure, scales = "free") +
+    scale_x_sqrt(name = "Cochran's Q (sqrt scale)") +
+    scale_y_continuous(labels = scales::percent, name = "Relative Width Increase vs FE") +
+    labs(title = "Sensitivity to Heterogeneity by Measure") +
+    theme_bw() +
+    theme(
+    strip.background = element_rect(fill = "lightblue"),
+    strip.text = element_text(face = "bold", size = 10),
+    axis.title.x = element_text(size = 10), 
+    axis.title.y = element_text(size = 10), 
+    axis.text.x  = element_text(size = 5), 
+    axis.text.y  = element_text(size = 5),     
+    legend.position = "bottom",
+    legend.title = element_text(size = 10), 
+    legend.text  = element_text(size = 10) 
+    )
+```
+
+```{r}
+summary_tab_strat <- q_relative %>%
+  filter(method != "Fixed effect") %>%
+  group_by(measure) %>%
+  mutate(n_ma = n_distinct(MA)) %>% 
+  group_by(measure, method, n_ma) %>%
+  summarise(
+    Mean_Increase = mean(rel_width_increase),
+    Median_Increase = median(rel_width_increase),
+    cor_spear = cor(Q, rel_width_increase, method = "spearman"),
+    cor_pear = cor(Q, rel_width_increase, method = "pearson"),
+    .groups = "drop"
+  ) %>%
+  mutate(measure = paste0(measure, " (N = ", n_ma, ")"))  %>%
+  arrange(measure, desc(Mean_Increase))
+
+summary_tab_strat %>%
+  gt(groupname_col = "measure") %>%
+  tab_header(
+    title = md("**Sensitivity to Heterogeneity by Measure**")
+  ) %>%
+  cols_label(
+    method = "Method",
+    Mean_Increase = "Mean % Increase",
+    Median_Increase = "Median % Increase",
+    cor_spear = "Corr(Q, Incr) [Spearman]", 
+    cor_pear = "Corr(Q, Incr) [Pearson]"
+  ) %>%
+  fmt_percent(
+    columns = c(Mean_Increase, Median_Increase),
+    decimals = 1
+  ) %>%
+  fmt_number(
+    columns = c(cor_spear, cor_pear),
+    decimals = 3
+  ) %>%
+  data_color(
+    columns = Mean_Increase,
+    method = "numeric",
+    palette = "Reds" 
+  ) %>%
+  data_color(
+    columns = c(cor_spear, cor_pear),
+    method = "numeric",
+    palette = "Blues",
+    domain = c(0, 1) 
+  ) %>%
+  opt_stylize(style = 6, color = "blue") %>%
+  tab_options(row_group.background.color = "#E6E6E6")
+```
+
+
 ## Checking Estimates
 
-Inspecting the Estimates (which are the point which has the highest p-value) provided by each method
+Inspecting the Estimates (the point which has the highest p-value) provided by each method
 
 ```{r}
 
@@ -1457,7 +1683,7 @@ long_vs_FE <- long_vs_FE %>%
     sign_method = sign3(method_est, tol),
     sign_defined = (sign_fe != 0L) & (sign_method != 0L), #both different from 0
     sign_agree = ifelse(sign_defined, sign_fe == sign_method, NA), # same sign, if sign not defined put NA
-    sign_flip = ifelse(sign_defined, sign_fe != sign_method, NA),
+    sign_flip = ifelse(sign_defined, sign_fe != sign_method, NA)
   )
 
 
