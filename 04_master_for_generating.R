@@ -25,7 +25,7 @@ if (!dir.exists(reports_dir)) {
 }
 
 # Get unique MA numbers with their info
-ma_info <- df_estimates[1:10, ] %>%
+ma_info <- df_estimates %>%
   select(no, identifier, sheet_name) %>%
   distinct() %>%
   arrange(no)
@@ -114,73 +114,3 @@ cat("\nAll reports saved in:", reports_dir, "\n")
 
 
 
-
-# ---- Final HTML file
-
-
-index_content <- paste0(
-  "<!DOCTYPE html>\n",
-  "<html>\n",
-  "<head>\n",
-  "  <meta charset='utf-8'>\n",
-  "  <title>Meta-Analysis Reports Index</title>\n",
-  "  <style>\n",
-  "    body { font-family: Arial, sans-serif; margin: 40px; }\n",
-  "    h1 { color: #2c3e50; }\n",
-  "    table { border-collapse: collapse; width: 100%; margin-top: 20px; }\n",
-  "    th, td { border: 1px solid #ddd; padding: 12px; text-align: left; }\n",
-  "    th { background-color: #3498db; color: white; }\n",
-  "    tr:nth-child(even) { background-color: #f2f2f2; }\n",
-  "    tr:hover { background-color: #ddd; }\n",
-  "    a { color: #3498db; text-decoration: none; }\n",
-  "    a:hover { text-decoration: underline; }\n",
-  "    .summary { background-color: #ecf0f1; padding: 15px; border-radius: 5px; margin-bottom: 20px; }\n",
-  "  </style>\n",
-  "</head>\n",
-  "<body>\n",
-  "  <h1>Meta-Analysis Reports</h1>\n",
-  "  <div class='summary'>\n",
-  "  </div>\n",
-  "  <table>\n",
-  "    <tr>\n",
-  "      <th>MA Number</th>\n",
-  "      <th>Identifier</th>\n",
-  "      <th>Sheet Name</th>\n",
-  "      <th>Report</th>\n",
-  "    </tr>\n"
-)
-
-for (i in 1:nrow(ma_info)) {
-  ma_no <- ma_info$no[i]
-  ma_id <- ma_info$identifier[i]
-  sheet <- ma_info$sheet_name[i]
-  safe_id <- gsub("[^A-Za-z0-9_-]", "_", ma_id)
-  filename <- sprintf("%s.html", safe_id)
-  
-  
-  index_content <- paste0(
-    index_content,
-    "    <tr>\n",
-    "      <td>", ma_no, "</td>\n",
-    "      <td>", ma_id, "</td>\n",
-    "      <td>", sheet, "</td>\n",
-    "      <td><a href='", filename, "'>View Report</a></td>\n",
-    "    </tr>\n"
-  )
-}
-
-index_content <- paste0(
-  index_content,
-  "  </table>\n",
-  "  <p style='margin-top: 30px; color: #7f8c8d; font-size: 0.9em;'>\n",
-  "    Generated on ", Sys.time(), "\n",
-  "  </p>\n",
-  "</body>\n",
-  "</html>"
-)
-
-index_file <- file.path("Output", "index.html")
-writeLines(index_content, index_file)
-cat("Index file created:", index_file, "\n")
-
-cat("\n Done! Open", normalizePath(index_file), "to view all reports.\n")

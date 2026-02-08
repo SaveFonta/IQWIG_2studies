@@ -164,7 +164,8 @@ df_estimates %>%
 
 # Summary measures
 
-This summary is computed using all the MA from above.   \\
+This summary is computed using all the MA from above.   
+
 **Scale** All ratio-based metrics (OR, RR, HR, etc.) are analyzed on the logarithmic scale. However, to remain consistent with IQWiG reporting conventions, they are labeled using their original metric names.
 
 
@@ -275,9 +276,9 @@ width_summary %>%
   opt_stylize(style = 6, color = "blue")
 ```
 
-For a better plotting, I removed the HK and also I am not plotting ROM and RD, since they only have respectively 1 and 6 observations.
+For a better visualization, the HK method is removed and ROM and RD are not plotted, since they only have respectively 1 and 6 observations.
 
-**Note** that MD and SMD are plotted on the square root scale
+**Note** that MD and SMD are reported on the square root scale
 
 ```{r}
 #| label: fig-ci-widths_facet
@@ -487,7 +488,7 @@ included_summary %>%
 ## CIs informativness
 
 
-For a given meta-analysis $x$, let the confidence interval for study $i$ be denoted by $[L_{i,x}, U_{i,x}]$, where $L_{i,x}$ is the lower bound and $U_{i,x}$ is the upper bound. Specifically for the two-study case, we have $L_{1,x}, U_{1,x}$ for study 1 and $L_{2,x}, U_{2,x}$ for study 2.
+For a given meta-analysis $x$, let the 95% confidence interval for study $i$ be denoted by $[L_{i,x}, U_{i,x}]$, where $L_{i,x}$ is the lower bound and $U_{i,x}$ is the upper bound. Specifically for the two-study case, we have $L_{1,x}, U_{1,x}$ for study 1 and $L_{2,x}, U_{2,x}$ for study 2.
 
 Define:
 $$
@@ -560,92 +561,6 @@ summ %>%
   opt_stylize(style = 6, color = "blue")
 ```
 
-
-## Number of significant meta-analyses
-
-Proportion of significant *meta-analyses* by method (i.e. with intervals excluding 0).
-There is a visual bug on the y axis labels, will fix it in the next days 
-```{r}
-#| label: fig-significance
-#| fig-height: 8
-
-sign <- extract_ma_metric(cis, "significant")
-
-get_breaks <- function(limits) {
-  seq(ceiling(min(limits)), floor(max(limits)), by = 1)
-}
-
-# Create plot
-sign_plot <- sign %>%
-  ggplot(aes(x = method, fill = significant)) +
-  facet_wrap(~n_studies, scales = "free_y", labeller = label_both) +
-  geom_bar(position = "stack", alpha = 0.8) +
-  scale_y_continuous(breaks = get_breaks) +
-  scale_fill_manual(
-    values = c("TRUE" = "#2ca02c", "FALSE" = "#d62728"),
-    labels = c("TRUE" = "Significant", "FALSE" = "Not Significant")
-  ) +
-  labs(
-    x = "Method",
-    y = "Count",
-    fill = "Significance"
-  ) +
-  theme(
-    axis.text.x = element_text(angle = 45, hjust = 1, size = 8),
-    panel.grid.major = element_line(color = "grey90"),
-    panel.border = element_rect(color = "black", fill = NA),
-    plot.title = element_text(face = "bold", size = 12),
-    legend.position = "bottom"
-  )
-
-sign_plot
-```
-
-```{r}
-#| label: tbl-significance
-
-sign %>%
-  group_by(method) %>%
-  summarise(
-    n_total = n(),
-    n_significant = sum(significant == TRUE, na.rm = TRUE),
-    prop_significant = n_significant / n_total,
-    .groups = "drop"
-  )  %>%
-  gt() %>%
-  tab_header(
-    title = md("**Significance Statistics**"),
-  ) %>%
-  cols_label(
-    method = "Method",
-    n_total = "Total",
-    n_significant = "Significant (n)",
-    prop_significant = "Significant (%)"
-  ) %>%
-  fmt_number(
-    columns = c(n_total, n_significant),
-    decimals = 0
-  ) %>%
-  fmt_percent(
-    columns = prop_significant,
-    decimals = 1
-  ) %>%
-  cols_align(
-    align = "center",
-    columns = -method
-  ) %>%
-  data_color(
-    columns = prop_significant,
-    method = "numeric",
-    palette = "Greens",
-    domain = c(0, 1)
-  ) %>%
-  tab_style(
-    style = cell_text(weight = "bold"),
-    locations = cells_row_groups()
-  ) %>%
-  opt_stylize(style = 6, color = "blue")
-```
 
 ## p-values (for $H_0: \theta=0$)
 
@@ -1125,8 +1040,8 @@ hetero_df <- bind_rows(
 summary_hetero <- hetero_df %>% 
   summarise(
     total = n(),
-    n_significant_Q = sum(significant_pval),
-    prop_significant = mean(significant_pval) * 100,
+    avg_Q = mean(Q),
+    avg_pQ = mean(p_Q),
     avg_I2 = mean(I2),
     avg_tau = mean(Tau2),
     .groups = "drop"
@@ -1136,13 +1051,13 @@ summary_hetero %>%
   gt() %>%
   cols_label(
     total = "Total MA",
-    n_significant_Q = "Significant Q (n)",
-    prop_significant = "Significant Q (%)",
+    avg_Q = "Average Q value",
+    avg_pQ = "Average value of  p value of Q",
     avg_I2 = "Average I2 value",
     avg_tau = "Average tau value"
   ) %>%
   fmt_number(
-    columns = c(prop_significant, avg_I2, avg_tau),
+    columns = c(avg_Q,avg_pQ,  avg_I2, avg_tau),
     decimals = 2
   ) %>%
   tab_style(

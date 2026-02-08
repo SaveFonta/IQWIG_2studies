@@ -181,9 +181,19 @@ confMeta.full <- function(data,
     df <- data[, required_cols, drop = FALSE]
   }
   
+  
   # Get unique meta-analysis IDs and names
-  ids <- unique(df[[ma_id_col]])
-  n0s <- unique(df[[ma_id_col_num]])
+  # Fast way, using split 
+  id_vec <- as.character(df[[ma_id_col]]) 
+  if (anyNA(id_vec)) stop("Missing meta-analysis IDs in column ", ma_id_col, ".")
+  
+  ids <- unique(id_vec)
+  idx_by_id <- split(seq_len(nrow(df)), id_vec)
+  
+  idx_by_id <- idx_by_id[ids]
+  
+  # numeric ids 
+  n0s <- vapply(idx_by_id, function(idx) unique(df[[ma_id_col_num]][idx])[1], numeric(1))
   
   # Check alignment
   if (length(ids) != length(n0s)) {
@@ -232,6 +242,7 @@ confMeta.full <- function(data,
       
       # parameter for process_single_ma: 
       df = df,
+      idx_by_id = idx_by_id, 
       id_col_name= ma_id_col,
       n0 = ma_id_col_num,
       level = level,
@@ -252,6 +263,7 @@ confMeta.full <- function(data,
         X = ids,
         FUN = process_single_ma,
         df = df,
+        idx_by_id = idx_by_id, 
         id_col_name= ma_id_col,
         n0 = ma_id_col_num,
         level = level,
@@ -270,6 +282,7 @@ confMeta.full <- function(data,
         X = ids,
         FUN = process_single_ma,
         df = df,
+        idx_by_id = idx_by_id, 
         id_col_name= ma_id_col,
         n0 = ma_id_col_num,
         level = level,
@@ -337,19 +350,17 @@ confMeta.full <- function(data,
 
 
 
-process_single_ma <- function(id, df, id_col_name, n0, est_col, se_col, level, study, effect.measure,
+process_single_ma <- function(id, df, idx_by_id, id_col_name, n0, est_col, se_col, level, study, effect.measure,
                               additional_info1_col = NULL, 
-                              additional_info2_col = NULL, sign_threshold = 0, MH = FALSE,
+                              additional_info2_col = NULL, sign_threshold = 0, MH = FALSE, 
                               ...) {
   # Subset data just from this meta-analysis
-  subset_data <- df[df[[id_col_name]] == id, , drop = FALSE]
-  
-  
-  # Check if subset has data
-  if (nrow(subset_data) == 0) {
-    warning(sprintf("No data found for meta-analysis ID: %s (number: %s)", id, n0))
+  idx <- idx_by_id[[as.character(id)]]
+  if (is.null(idx)) {
+    warning(sprintf("No data found for meta-analysis ID: %s", id))
     return(NULL)
   }
+  subset_data <- df[idx, , drop = FALSE]  
   
   
   n0_unique <- unique(subset_data[[n0]])
