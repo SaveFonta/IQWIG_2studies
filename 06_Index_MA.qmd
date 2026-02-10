@@ -1,0 +1,194 @@
+---
+title: "Meta-Analysis Reports Index"
+format: 
+  dashboard:
+    theme: cosmo
+    embed-resources: true
+---
+
+```{css}
+/*navbar is the principal title bar */
+.navbar {
+    background-color: #008bff !important;
+}
+
+/* text of navbar */
+.navbar-title, .navbar-brand {
+    color: white !important;
+}
+
+/* "Showing X entries" */
+.dataTables_info {
+    background-color: #008bff;
+    color: white !important
+}
+
+/* Header of table */
+table.dataTable thead th {
+    background-color: #f8f9fa;
+    border-bottom: 2px solid #008bff !important;
+}
+```
+
+```{r}
+#| label: setup
+#| include: false
+load_libraries <- function(...) {
+  pkgs <- as.character(match.call(expand.dots = FALSE)$...)
+  
+  for (pkg in pkgs) {
+    if (!require(pkg, character.only = TRUE, quietly = TRUE)) {
+      
+      # If not there (FALSE), install and then load it
+      install.packages(pkg)
+      library(pkg, character.only = TRUE, quietly = TRUE)
+    }
+  }
+}
+
+# Install and load required packages
+if (!requireNamespace("remotes", quietly = TRUE)) {
+  install.packages("remotes")
+}
+#remotes::install_github("SaveFonta/confMeta", quiet = TRUE, upgrade = "never")
+
+# Load all libraries
+load_libraries(
+  "dplyr", "DT", "tidyr")
+
+
+# input data from
+path <- file.path("Output", "cis.rds")
+input <- readRDS(path)
+df_estimates <- input$df_estimates
+
+```
+
+```{r}
+#| label: setup-data
+#| message: false
+#| echo: false
+
+ma_info <- df_estimates %>%
+  select(no, identifier, sheet_name, effect.measure) %>%
+  arrange(no) %>%
+  distinct() %>% #fundamental, otw there are two rows each MA
+  mutate(
+    safe_id = gsub("[^A-Za-z0-9_-]", "_", identifier), #i checked and still unique id
+  Report = paste0('<a href="Output/Reports/', safe_id, '.html" target="_blank" class="btn btn-primary btn-sm" style="text-decoration:none;">View Report</a>')
+  )
+
+# GOAL: add results of the methods to each MA
+cis <- input$cis
+cis_list <- lapply(cis, function(x) x[["ci"]])
+cis_long <- bind_rows(cis_list, .id = "identifier")
+
+# Wide with estimate
+df_estimates_wide <- cis_long %>%
+  select(identifier, method, estimate) %>%
+  pivot_wider(
+    names_from = method, 
+    values_from = estimate,
+    names_prefix = "est_"
+  )
+
+# Wide with significant
+df_significant_wide <- cis_long %>%
+  select(identifier, method, p_0) %>%
+  pivot_wider(
+    names_from = method, 
+    values_from = p_0,
+    names_prefix = "p0_"
+  )
+
+
+#now let's also add the significance of Q
+hetero_list <- lapply(cis, function(x) x[["heterogeneity"]])
+hetero_df <- bind_rows(hetero_list, .id = "identifier") %>% 
+  select(identifier, Q, I2)
+
+
+# Merge (I use left join here, can also use merge)
+ma_info <- ma_info %>%
+  left_join(df_estimates_wide, by = "identifier") %>%
+  left_join(df_significant_wide, by = "identifier") %>% 
+  left_join(hetero_df, by = "identifier")
+
+
+#convert in factor what needed
+ma_info <- ma_info %>% 
+  mutate(
+    sheet_name = as.factor(sheet_name),
+    effect.measure = as.factor (effect.measure),
+    p0_Edgington = p0_Edgington
+         )
+
+# 
+ma_info <- ma_info  %>% 
+  rowwise() %>%  #to process rowise 
+  mutate(
+    est_range = {
+      methods_to_check <- c(`est_Edgington`, `est_Edgington (1/SE)`, 
+                           `est_Edgington (1/SE^2)`, `est_Fixed effect`)
+      abs(max(methods_to_check, na.rm = TRUE) - min(methods_to_check, na.rm = TRUE))
+    },
+    
+    pval_range = {
+      p_values <- c(`p0_Edgington`, `p0_Edgington (1/SE)`, 
+                      `p0_Edgington (1/SE^2)`, `p0_Fixed effect`)
+      max(p_values, na.rm = TRUE) - min(p_values, na.rm = TRUE)
+    }
+  ) %>%
+  ungroup()
+```
+
+
+## Row {height=20%}
+### Brief explanation
+
+This dashboard lists all meta-analyses included in the project.  
+You can filter each column and click **View Report** to open the full analysis.
+
+**Variables**
+
+- **Identifier**: unique meta-analysis ID  
+- **Effect Measure**: effect size metric (e.g., OR, RR, MD, SMD)  
+- **p value Range ($H_0: \theta = 0$)**: difference between the maximum and minimum p-values across the methods, computed as $\max(p) - \min(p)$  
+- **Estimate Range**: absolute difference between point estimates across methods, computed as $|\max(\hat{\theta}) - \min(\hat{\theta})|$  
+- **Q value**: Cochran’s heterogeneity statistic  
+- **I² value**: heterogeneity percentage (higher values indicate more heterogeneity)  
+- **Link**: opens the HTML report for the meta-analysis
+
+
+
+## Row {height=80%}
+```{r}
+#| title: "Select a Meta Analysis"
+#| echo: false
+
+#check: https://rstudio.github.io/DT/#https://rstudio.github.io/DT/#
+
+ma_info %>%
+  select(
+    "Identifier" = identifier, 
+    "Effect Measure" = effect.measure,
+    "p value Range (H<sub>0</sub>: &theta; = 0)" = pval_range,
+    "Estimate Range" = est_range,
+    "Q value" = Q,
+    "I2 value" = I2,
+    "Edgington p value" = p0_Edgington,
+    "Link" = Report
+  ) %>%
+  datatable(
+    escape = FALSE, # Absolutely necessary to trasform those HTML in clickable links 
+    filter = "top",   # Adds filters on top of each column
+    options = list(
+      pageLength = 50, #50 MA per page
+      ordering = TRUE, ## allows ordering
+      searchHighlight = TRUE,
+      autoWidth = TRUE
+    )
+  ) %>%
+  formatRound(columns = c("Edgington p value", "Estimate Range", "Q value", "I2 value", "p value Range (H<sub>0</sub>: &theta; = 0)"), digits = 3)
+```
+

@@ -14,7 +14,7 @@ library(tidyr)
 
 
 ## ---- Path to the Excel file ----
-path_to_excel <- file.path("Input", "IQWiG-MA-Datenbank_Stand2024.xlsx"  )
+path_to_excel <- file.path("Input", "IQWiG-MA-Datenbank_Stand2025.xlsx"  )
 
 
 ## Read sheets
@@ -270,7 +270,7 @@ ma_by_endpoint <- iqwig_all %>%
     .groups     = "drop"
   )
 #small check that everything is in order
-nrow(ma_by_endpoint) # should be 2144
+nrow(ma_by_endpoint) # should be 2144 (with 2025 data it is 2291)
 
 
 #inspect 
@@ -280,33 +280,36 @@ ma_multi_endpoint <- ma_by_endpoint %>%
 cat("Number of MA (Projektnummer + Abbildung) with >1 Endpunkt:", 
     nrow(ma_multi_endpoint), "\n\n")
 
-print(ma_multi_endpoint)
 
-#since there are only two, we can singularly inspect them  
-
-#A12-19 
-A12.19 <- iqwig_all[iqwig_all$Projektnummer == "A12-19" & iqwig_all$Abbildung== "Abb. 1", ]
-print(A12.19)
-#this is ok, also the number of individuals is perfect, but 
-# AnzahlStudien = 6, so the point is, with different endopoints, are these 3 different metanalysi 
-# with 2 studies, or a single MA w 6 studies? 
-
-
-
-#N17-01A 
-N17.01A <- iqwig_all[iqwig_all$Projektnummer == "N17-01A" & iqwig_all$Abbildung == "Abb. 26", ]
-print(N17.01A)
-
-#same as before, AnzahlStudien = 4.
-
-# I can just change number of studies and that's it
-# Talking w/ Samuel, don't bother to change at the moment, let's follow what IQWIG did
-
-#So we comment this
-
-#iqwig_all[iqwig_all$Projektnummer == "A12.19" & iqwig_all$Abbildung == "Abb. 1", "AnzahlStudien"]<- 2
-#iqwig_all[iqwig_all$Projektnummer == "N17-01A" & iqwig_all$Abbildung == "Abb. 26", "AnzahlStudien"]<- 2
-
+# The endpoint has been fixed in the 2025 report, so this part is commented out 
+###################################################################################
+# print(ma_multi_endpoint)
+# 
+# #since there are only two, we can singularly inspect them  
+# 
+# #A12-19 
+# A12.19 <- iqwig_all[iqwig_all$Projektnummer == "A12-19" & iqwig_all$Abbildung== "Abb. 1", ]
+# print(A12.19)
+# #this is ok, also the number of individuals is perfect, but 
+# # AnzahlStudien = 6, so the point is, with different endopoints, are these 3 different metanalysi 
+# # with 2 studies, or a single MA w 6 studies? 
+# 
+# 
+# 
+# #N17-01A 
+# N17.01A <- iqwig_all[iqwig_all$Projektnummer == "N17-01A" & iqwig_all$Abbildung == "Abb. 26", ]
+# print(N17.01A)
+# 
+# #same as before, AnzahlStudien = 4.
+# 
+# # I can just change number of studies and that's it
+# # Talking w/ Samuel, don't bother to change at the moment, let's follow what IQWIG did
+# 
+# #So we comment this
+# 
+# #iqwig_all[iqwig_all$Projektnummer == "A12.19" & iqwig_all$Abbildung == "Abb. 1", "AnzahlStudien"]<- 2
+# #iqwig_all[iqwig_all$Projektnummer == "N17-01A" & iqwig_all$Abbildung == "Abb. 26", "AnzahlStudien"]<- 2
+##########################################################################################
 
 
 
@@ -360,10 +363,13 @@ rows_no_estimate <- iqwig_all %>%
 
 cat("Rows with NO usable estimate:", nrow(rows_no_estimate), "\n")
 
+
 #here is the rows wwithout estimaets:
 # N18-03 || Abb. 64 || SF-36 körperliche Rollenfunktion
 #N18-03 || Abb. 65 || SF-36 emotionale Rollenfunktion
 
+#NOTE --> It has been fixed in 2025 version, but there are empy rows that dont have the study names and nothing in the end of some excels
+#anyway we don't care since they are dropped
 
 
 ## ---- Recompute AnzahlStudien after dropping unusable rows ----
@@ -518,10 +524,8 @@ print(ma_size_dist)
 
 
 # Exctract just the two studies MA
-data_2_studies <- iqwig_all[iqwig_all$AnzahlStudien == 2, ]
+data_two_studies <- iqwig_all[iqwig_all$AnzahlStudien == 2, ]
 cat ("Number of MA with 2 studies", length(unique(data_two_studies$MA_id)))
 
 
 
-# put this as last so I can use source in my master file
-data_2_studies

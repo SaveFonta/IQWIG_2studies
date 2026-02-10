@@ -1,76 +1,28 @@
 ---
-title: "`r params$ma_title`"
+title: "Meta-Analysis Report"
 format: 
   html:
     embed-resources: true
-    code-fold: false
-    code-tools: false
 params:
-  ma_no: 1        # ID numerico del MA (colonna no)
-  ma_title: "Singular MA"  # default
+  result_path: "" 
 ---
 
 ```{r}
 #| label: setup
 #| include: false
+library(gt)
+library(dplyr)
 
-# Function to load libraries quietly
-load_libraries <- function(...) {
-  pkgs <- as.character(match.call(expand.dots = FALSE)$...)
-  
-  for (pkg in pkgs) {
-    if (!require(pkg, character.only = TRUE, quietly = TRUE)) {
-      install.packages(pkg, quiet = TRUE)
-      library(pkg, character.only = TRUE, quietly = TRUE)
-    }
-  }
-}
-
-# Load libraries
-load_libraries("gt", "dplyr", "tibble")
-
-# Source files
-suppressMessages({
-  source("00_confMeta_parallelized.R")
-  source("00_utilities.R")
-})
-
-# Load data
-inp <- "Output"
-path <- file.path (inp, "cis.rds")
-input <- readRDS(path)
-cis <- input$cis
-df_estimates <- input$df_estimates
-
-# Select this MA based on parameter
-this_no <- params$ma_no
-
-sub <- df_estimates[df_estimates$no == this_no, , drop = FALSE]
-
-if (nrow(sub) == 0) {
-  stop("No rows found for ma_no = ", this_no)
-}
-
-# Calculate results for this MA
-res <- confMeta.full(
-  data             = sub,
-  level            = 0.95,
-  est_col          = "logEst",
-  se_col           = "selogEst",
-  include_bayesian = FALSE,
-  generate_plot    = TRUE,
-  plot_types       = c("p", "forest")
-)
+# Simply load the pre-calculated object
+res <- readRDS(params$result_path)
+l <- res[[1]]
 ```
 
 ```{r}
 #| output: asis
 #| echo: false
 
-# l è il singolo meta-analisi
-l <- res[[1]]
-
-# Header (usa ma_id dall'oggetto)
+# Header
 cat("## ", l$ma_id, "\n\n", sep = "")
 
 cat("This is meta-analysis number **",l$ma_id_number, "**, it uses the **", l$measure, "** as an outcome measure.\n\n", sep = "")
@@ -83,60 +35,74 @@ cat("The Data Formatting is **", l$additional_info$data_report, "**, and it belo
 # -----------------------------
 cat("The meta-analysis contains the following studies:\n\n")
 
+library(gt)
+library(tidyverse)
+
+# -----------------------------
+# Table 1: Inputs
+# -----------------------------
 tbl_inputs <- as.data.frame(l$inputs) %>%
   tibble::rownames_to_column(var = "Study") %>%
   gt() %>%
+  tab_header(title = "Study Input Data") %>%
   cols_label(
     Study    = "Study Name",
     estimate = "Log Estimate",
-    SE       = "Standard Error"
+    SE       = "Std. Error",
+    lower    = "95% CI", # Label changed to reflect the merge below
+    width    = "Width"
   ) %>%
-  fmt_number(columns = c(estimate, SE), decimals = 3) %>%
-  opt_stylize(style = 6, color = "blue") 
+  cols_merge(
+    columns = c(lower, upper),
+    pattern = "({1}, {2})"
+  ) %>%
+  # Formatting and Alignment
+  fmt_number(columns = -Study, decimals = 3) %>%
+  cols_align(align = "center", columns = -Study) %>%
+  opt_stylize(style = 6, color = "blue") %>%
+  tab_options(table.width = pct(100))
+
 print(tbl_inputs)
-cat("\n\n")
 
 # -----------------------------
-# Table 2: CIs
+# Table 2: Results
 # -----------------------------
-cat("The confidence intervals, calculated with different methods, are shown below.\n\n")
-
-tbl_results <- l$ci %>%
-  dplyr::select(-estimate) %>% 
+tbl_results <- l$ci %>% 
   gt() %>%
+  tab_header(title = "Confidence Interval Estimation Results") %>%
   fmt_number(
-    columns = c(lower, upper, aucc, p_0, width, aucc_ratio, ci_skewness), 
+    columns = c(estimate, lower, upper, aucc, p_0, width, aucc_ratio, ci_skewness), 
     decimals = 3
   ) %>%
-  sub_missing(
-    columns = everything(),
-    missing_text = "—"
-  ) %>%
+  sub_missing(columns = everything(), missing_text = "—") %>%
+  # Merging CI columns
   cols_merge(
     columns = c(lower, upper),
     pattern = "({1}, {2})"
   ) %>%
   cols_label(
     method      = "Method",
+    estimate    = "Estimate",
     lower       = "95% CI",
     aucc        = "AUCC",
     aucc_ratio  = "AUCC Ratio",
     ci_skewness = "Skewness (β)",
-    p_0         = "p-val (μ = 0)",
+    p_0         = "p-val (μ=0)",
     width       = "Width"
   ) %>%
+  # Styling and Alignment
   cols_align(align = "center", columns = -method) %>%
   tab_style(
-    style = list(
-      cell_text(weight = "bold", color = "#2c3e50")
-    ),
+    style = cell_text(weight = "bold"),
     locations = cells_body(
       columns = lower,
-      rows = significant == TRUE
+      rows = (significant == TRUE)
     )
   ) %>%
   cols_hide(columns = c(significant)) %>%
-  opt_stylize(style = 6, color = "blue") 
+  opt_stylize(style = 6, color = "blue") %>%
+  tab_options(table.width = pct(100))
+
 print(tbl_results)
 
 # -----------------------------
@@ -186,3 +152,5 @@ cat("In a graphical representation, this looks as follows.\n\n")
 print(l$plot)
 
 ```
+
+**NOTE**: the plot and the estimates values for Fixed Effect are reported using the **Inverse Variance** method.
