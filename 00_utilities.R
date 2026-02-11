@@ -399,7 +399,100 @@ extract_ma_metric <- function(cis_list, metric) {
 
 
 
+#utilities to compute summary statistics from an obbject processed by extract_ma_metric
 
+library(dplyr)
+library(gt)
+
+#  Summary Function
+
+compute_summary <- function(X, stats, grouping = "method", count_id = NULL) {
+  
+  # If count_id (usually = MA) is provided, compute distinct count within FIRST grouping variable 
+  if (!is.null(count_id)) {
+    count_col_name <- paste0("n_", count_id)
+    
+    X <- X %>%
+      group_by(across(all_of(grouping[1]))) %>%
+      mutate(!!count_col_name := n_distinct(.data[[count_id]])) %>%
+      ungroup()
+    
+    # Add the count column to grouping variables
+    grouping <- c(grouping, count_col_name)
+  }
+  
+  table <- X %>% 
+    group_by(across(all_of(grouping))) %>%  
+    summarise(
+      mean   = mean(.data[[stats]], na.rm = TRUE),
+      median = median(.data[[stats]], na.rm = TRUE),
+      sd     = sd(.data[[stats]], na.rm = TRUE),
+      q25    = quantile(.data[[stats]], 0.25, na.rm = TRUE),
+      q75    = quantile(.data[[stats]], 0.75, na.rm = TRUE),
+      min    = min(.data[[stats]], na.rm = TRUE),
+      max    = max(.data[[stats]], na.rm = TRUE),
+      .groups = "drop"
+    )
+  
+  # If count_id was provided, append count to first grouping column and remove count column
+  if (!is.null(count_id)) {
+    count_col_name <- paste0("n_", count_id)
+    first_group <- grouping[1]
+    
+    table <- table %>%
+      mutate(!!first_group := paste0(.data[[first_group]], " (N = ", .data[[count_col_name]], ")")) %>%
+      select(-all_of(count_col_name))
+  }
+  
+  return(table)
+}
+
+#  Render Function
+
+
+render_gt <- function(table, title, decimals = 2, group_col = NULL) { #usually group_col = measure
+  
+  # Initialize gt with or without grouping
+  gt_obj <- if (is.null(group_col)) {
+    gt(table)
+  } else {
+    gt(table, groupname_col = group_col) %>%
+      tab_options(row_group.background.color = "#E6E6E6")
+  }
+  
+  gt_obj %>%
+    tab_header(
+      title = md(paste0("**", title, "**")) 
+    ) %>%
+    cols_label(
+      .list = list(
+        # We can keep 'method' here. If you group by something else, 
+        # gt just ignores this label.
+        method = "Method",
+        mean   = "Mean",
+        median = "Median",
+        sd     = "SD",
+        q25    = "Q25",
+        q75    = "Q75",
+        min    = "Min",
+        max    = "Max"
+      )
+    ) %>%
+    fmt_number(
+      columns = where(is.numeric), 
+      decimals = decimals
+    ) %>%
+    # Align everything center except the first column (labels)
+    cols_align(
+      align = "center",
+      columns = -1
+    ) %>%
+    tab_style(
+      style = cell_text(weight = "bold"),
+      locations = cells_column_labels()
+    ) %>%
+    opt_stylize(style = 6, color = "blue")
+}
 
 #########################################
 #       Utilities for lemma checking    #

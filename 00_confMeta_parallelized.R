@@ -123,7 +123,6 @@ confMeta.full <- function(data,
                    study = "study",
                    parallel = FALSE,
                    n_cores = NULL,
-                   show_progress = TRUE,
                    additional_info1_col = "data_report",
                    additional_info2_col = "sheet_name",
                    sign_threshold = 0,
@@ -187,116 +186,97 @@ confMeta.full <- function(data,
   id_vec <- as.character(df[[ma_id_col]]) 
   if (anyNA(id_vec)) stop("Missing meta-analysis IDs in column ", ma_id_col, ".")
   
-  ids <- unique(id_vec)
+  #ids <- unique(id_vec)
+  #this is faster and does the same:
+  id_factor <- factor(id_vec, levels = unique(id_vec))
+  ids <- levels(id_factor)
+  
   idx_by_id <- split(seq_len(nrow(df)), id_vec)
   
-  idx_by_id <- idx_by_id[ids]
-  
+
   # numeric ids 
-  n0s <- vapply(idx_by_id, function(idx) unique(df[[ma_id_col_num]][idx])[1], numeric(1))
+  first_occurrence <- match(ids, id_vec)
+  n0s <- df[[ma_id_col_num]][first_occurrence]
   
-  # Check alignment
-  if (length(ids) != length(n0s)) {
-    stop("Number of unique MA number IDs does not match number of unique MA IDs ",
-         "Fix that to run this function")
-  }
+  # Validation: Check 1-1 mapping more efficiently
+  id_mapping <- df[first_occurrence, c(ma_id_col, ma_id_col_num), drop = FALSE]
   
-  
-  #maybe have same length but not 1-1 mapping:
-  pairs <- unique(df[, c(ma_id_col, ma_id_col_num), drop = FALSE])
-  if (any(duplicated(pairs[[ma_id_col]])) || any(duplicated(pairs[[ma_id_col_num]]))) {
+  if (anyDuplicated(id_mapping[[ma_id_col]]) || anyDuplicated(id_mapping[[ma_id_col_num]])) {
     stop("MA id and MA number are not in a 1-1 mapping.")
-  }
-  
-  
-  
-  
-  #  ---- Parallel Processing -----
-  
-  if (parallel) {
-    # Determine number of cores
-    if (is.null(n_cores)) {
-      n_cores <- max(1, parallel::detectCores() - 1)
-    }
-    
-    # Don't use more cores than meta-analyses
-    n_cores <- min(n_cores, length(ids))
-    
-    if (show_progress) {
-      message(paste0("Processing ", length(ids), " meta-analyses using ", n_cores, " cores..."
-      ))
-    }
   }
   
 
   
-  # ---- Parallel process ----
-  # Choose processing method
+  
+  # ---- Process meta-analyses ----
+  # CHANGED: Use future.apply instead of pbapply for parallel
+  # ---- Process meta-analyses ----
+  
   if (parallel && length(ids) > 1) {
     
-    # Parallel processing with progress bar
+    # first we configure the parallel plan
+    workers_to_use <- if (!is.null(n_cores)) n_cores else parallelly::availableCores()
+    future::plan(future::multisession, workers = workers_to_use)
+    
+    # Parallel Execution with progress bar
+    progressr::with_progress({
+      
+      p <- progressr::progressor(along = ids)
+      
+      out <- future.apply::future_lapply(
+        X = ids, 
+        FUN = function(x, ...) {
+          res <- process_single_ma(x, ...)
+          p() # move the progress bar
+          return(res)
+        },
+        
+        # Data & Arguments
+        df = df,
+        idx_by_id = idx_by_id, 
+        id_col_name = ma_id_col,
+        n0 = ma_id_col_num,
+        level = level,
+        est_col = est_col, 
+        se_col = se_col,
+        study = study,
+        sign_threshold = sign_threshold,
+        effect.measure = effect.measure,
+        additional_info1_col = additional_info1_col,
+        additional_info2_col = additional_info2_col,
+        MH = MH,
+        ...,
+        
+        # Future Settings
+        future.seed = TRUE      # uses the same seed each core (not necessary here actually but whatever)
+      )
+      
+    }, handlers = progressr::handler_txtprogressbar(char = "=")) 
+    
+    # Force back to sequential
+    future::plan(future::sequential)
+    
+  } else {
+    
+    # SEQUENTIAL
     out <- pbapply::pblapply(
       X = ids,
-      cl = n_cores,
       FUN = process_single_ma,
-      
-      # parameter for process_single_ma: 
       df = df,
       idx_by_id = idx_by_id, 
-      id_col_name= ma_id_col,
+      id_col_name = ma_id_col,
       n0 = ma_id_col_num,
       level = level,
       est_col = est_col, 
       se_col = se_col,
       study = study,
-      sign_threshold=sign_threshold,
+      sign_threshold = sign_threshold, 
       effect.measure = effect.measure,
       additional_info1_col = additional_info1_col,
       additional_info2_col = additional_info2_col,
       MH = MH,
       ...
     )
-  } else {
-    # Sequential processing
-    if (show_progress && length(ids) > 1) {
-      out <- pbapply::pblapply(
-        X = ids,
-        FUN = process_single_ma,
-        df = df,
-        idx_by_id = idx_by_id, 
-        id_col_name= ma_id_col,
-        n0 = ma_id_col_num,
-        level = level,
-        est_col = est_col, 
-        se_col = se_col,
-        study = study,
-        sign_threshold= sign_threshold, 
-        effect.measure = effect.measure,
-        additional_info1_col = additional_info1_col,
-        additional_info2_col = additional_info2_col,
-        MH = MH,
-        ...
-      )
-    } else {
-      out <- lapply(
-        X = ids,
-        FUN = process_single_ma,
-        df = df,
-        idx_by_id = idx_by_id, 
-        id_col_name= ma_id_col,
-        n0 = ma_id_col_num,
-        level = level,
-        est_col = est_col, 
-        se_col = se_col,
-        study = study,
-        sign_threshold= sign_threshold,
-        effect.measure = effect.measure,
-        additional_info1_col = additional_info1_col,
-        additional_info2_col = additional_info2_col,
-        MH = MH,
-        ...
-      )
-    }
   }
   
   # ---- Results -----
@@ -306,7 +286,7 @@ confMeta.full <- function(data,
   names(out) <- ids
   
   # Remove NULL entries (failed analyses)
-  failed <- sapply(out, is.null)
+  failed <- lengths(out) == 0L
   if (any(failed)) {
     warning(sprintf("%d meta-analysis(es) failed to process", sum(failed)))
     out <- out[!failed]
@@ -355,7 +335,7 @@ process_single_ma <- function(id, df, idx_by_id, id_col_name, n0, est_col, se_co
                               additional_info2_col = NULL, sign_threshold = 0, MH = FALSE, 
                               ...) {
   # Subset data just from this meta-analysis
-  idx <- idx_by_id[[as.character(id)]]
+  idx <- idx_by_id[[id]]
   if (is.null(idx)) {
     warning(sprintf("No data found for meta-analysis ID: %s", id))
     return(NULL)
@@ -613,36 +593,28 @@ get_ma_results <- function(data,
     
   
   # ---- Run confMeta for Each Method ----
-  if (MH == TRUE){
-    cms <- lapply(methods, function(mdef) {
-      confMeta(
-        estimates = estimates,
-        SEs = SEs,
-        w = mdef$w,
-        study_names = study_names,
-        fun = mdef$fun,
-        fun_name = mdef$name,
-        conf_level = conf_level,
-        MH = TRUE,
-        table_2x2 = table_2x2, 
-        measure = meas,
-        ...
-      )
-    })
-  } else {
-    cms <- lapply(methods, function(mdef) {
-      confMeta(
-        estimates = estimates,
-        SEs = SEs,
-        w = mdef$w,
-        study_names = study_names,
-        fun = mdef$fun,
-        fun_name = mdef$name,
-        conf_level = conf_level,
-        ...
-      )
-    })
+  
+  base_args <- list(
+    estimates = estimates,
+    SEs = SEs,
+    study_names = study_names,
+    conf_level = conf_level
+  )
+  
+  if (MH == TRUE) {
+    base_args$MH <- TRUE
+    base_args$table_2x2 <- table_2x2
+    base_args$measure <- meas
   }
+  
+  cms <- lapply(methods, function(mdef) {
+    args <- c(base_args, list(
+      w = mdef$w,
+      fun = mdef$fun,
+      fun_name = mdef$name
+    ), list(...))
+    do.call(confMeta, args)
+  })
   
   names(cms) <- vapply(methods, `[[`, character(1L), "name")
   
@@ -651,16 +623,12 @@ get_ma_results <- function(data,
   
   #Extract individual cis, extract it from Edgington(but same for every method)
   ci_individual <- as.data.frame( cms[["Edgington"]][["individual_cis"]] ) 
+  ci_individual$width <- ci_individual$upper - ci_individual$lower
+  ci_individual$significant <- !(ci_individual$lower <= sign_threshold & 
+                                   ci_individual$upper >= sign_threshold)
+  
 
-  
-  ci_individual <- ci_individual %>% 
-    mutate (
-      width = upper - lower,
-      significant = !(lower <= sign_threshold & upper >= sign_threshold)
-    )
 
-  
-  
   # Extract joint CIs from confMeta objects
   ci_new <- lapply(cms, `[[`, i = "joint_cis")
   
