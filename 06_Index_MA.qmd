@@ -69,6 +69,9 @@ df_estimates <- input$df_estimates
 #| message: false
 #| echo: false
 
+
+
+
 ma_info <- df_estimates %>%
   select(no, identifier, sheet_name, effect.measure) %>%
   arrange(no) %>%
@@ -101,6 +104,22 @@ df_significant_wide <- cis_long %>%
     names_prefix = "p0_"
   )
 
+# containing all the singular studies
+df_studies <- df_estimates %>% 
+  group_by(identifier) %>% 
+  summarise(
+    est1 = logEst[1],
+    est2 = logEst[2],
+    SE1  = selogEst[1],
+    SE2  = selogEst[2],
+
+    opposing_directions = est1 * est2 < 0,   # opp signs
+    abs_diff = abs(est1 - est2),
+    SE_ratio = max(c(SE1, SE2)) / min(c(SE1, SE2)),
+
+    .groups = "drop"
+  )
+
 
 #now let's also add the significance of Q
 hetero_list <- lapply(cis, function(x) x[["heterogeneity"]])
@@ -112,7 +131,8 @@ hetero_df <- bind_rows(hetero_list, .id = "identifier") %>%
 ma_info <- ma_info %>%
   left_join(df_estimates_wide, by = "identifier") %>%
   left_join(df_significant_wide, by = "identifier") %>% 
-  left_join(hetero_df, by = "identifier")
+  left_join(hetero_df, by = "identifier") %>% 
+  left_join(df_studies, by = "identifier")
 
 
 #convert in factor what needed
@@ -120,7 +140,8 @@ ma_info <- ma_info %>%
   mutate(
     sheet_name = as.factor(sheet_name),
     effect.measure = as.factor (effect.measure),
-    p0_Edgington = p0_Edgington
+    p0_Edgington = p0_Edgington, 
+    opposing_directions = as.factor(opposing_directions)
          )
 
 # 
@@ -157,6 +178,8 @@ You can filter each column and click **View Report** to open the full analysis.
 - **Estimate Range**: absolute difference between point estimates across methods, computed as $|\max(\hat{\theta}) - \min(\hat{\theta})|$  
 - **Q value**: Cochran’s heterogeneity statistic  
 - **I² value**: heterogeneity percentage (higher values indicate more heterogeneity)  
+- **Opposite directions**: *TRUE* if the singular study estimates have opposite signs
+- **SE ratio **: ratio of the singular studies standard errors (with the convention that the larger is at the numerator) i.e. $SE_{ratio} = \frac{max(SE)}{min(SE)}$
 - **Link**: opens the HTML report for the meta-analysis
 
 
@@ -177,6 +200,8 @@ ma_info %>%
     "Q value" = Q,
     "I2 value" = I2,
     "Edgington p value" = p0_Edgington,
+    "Opposite directions" = opposing_directions,
+    "SE ratio" = SE_ratio,
     "Link" = Report
   ) %>%
   datatable(
@@ -189,6 +214,6 @@ ma_info %>%
       autoWidth = TRUE
     )
   ) %>%
-  formatRound(columns = c("Edgington p value", "Estimate Range", "Q value", "I2 value", "p value Range (H<sub>0</sub>: &theta; = 0)"), digits = 3)
+  formatRound(columns = c("Edgington p value", "Estimate Range", "Q value", "I2 value", "p value Range (H<sub>0</sub>: &theta; = 0)", "SE ratio"), digits = 3)
 ```
 
