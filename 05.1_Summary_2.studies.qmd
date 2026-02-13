@@ -17,6 +17,10 @@ format:
      colorlinks: true
 execute:
   echo: !expr "knitr::is_html_output()"
+  cache: true
+  freeze: auto
+  warning: false
+  message: false
 editor: 
   markdown: 
     wrap: 72
@@ -55,8 +59,7 @@ load_libraries(
   "ggh4x"
 )
 
-# Set global theme for ggplot
-theme_set(theme_minimal(base_size = 11))
+
 
 ```
 
@@ -71,6 +74,69 @@ inp <- file.path("Output", name)
 input <- readRDS(inp)
 cis <- input$cis
 df_estimates <- input$df_estimates
+
+
+# FIRST DATAFRAME
+# Contains all stats for every Method x MA combination
+
+df_mas <- map_dfr(cis, function(x) {
+  x$ci %>%
+    as.data.frame() %>%
+    mutate(
+      MA = x$ma_id,
+      measure = x$measure,
+      # Add heterogeneity (repeated for all methods in this MA)
+      Q = x$heterogeneity$Q,
+      I2 = x$heterogeneity$I2,
+      Tau2 = x$heterogeneity$Tau^2,
+
+      data_skewness = x$data_skewness
+    )
+}) %>%
+  rename(p_val = p_0) 
+
+# 2ND
+# Contains 1 row per MA with study-level info (SEs, estimates, bounds)
+
+df_inputs <- map_dfr(cis, function(x) {
+   est <- x$inputs$estimate
+   se  <- x$inputs$SE
+   low <- x$inputs$lower
+   upp <- x$inputs$upper
+   
+   data.frame(
+     MA = x$ma_id,
+     est_1 = est[1], 
+     est_2 = est[2],
+     
+     SE_1 = se[1],   
+     SE_2 = se[2],
+
+     min_study_lower = min(low),
+     max_study_upper = max(upp),
+
+     SE_ratio = max(se) / min(se),
+     opposing_directions = (est[1] * est[2]) < 0
+   )
+})
+
+
+# This is useful for comparison w/ FE baseline
+
+df_fe <- df_mas %>%
+  filter(method == "Fixed effect") %>%
+  select(MA, width_fe = width, p_fe = p_val, est_fe = estimate)
+
+df_comparisons <- df_mas %>%
+  filter(method != "Fixed effect") %>%
+  left_join(df_fe, by = "MA") %>%
+  mutate(
+    rel_width_increase = (width - width_fe) / width_fe,
+    p_diff = p_val - p_fe,
+    shrinkage_ratio = ifelse(abs(est_fe) < 1e-6, NA, estimate / est_fe),
+    sign_flip = sign(estimate) != sign(est_fe)
+  )
+
 
 ```
 
@@ -181,14 +247,11 @@ df_estimates %>%
 
 -   **Hartung-Knapp** (2001a/b) and variance correction is applied if HK confidence interval is narrower than CI from classic random effects model with DerSimonian-Laird estimator (IQWiG, 2022)
 
-
-
-# Summary measures
-
 This summary is computed using all the MA from above.
 
 **Scale** All ratio-based metrics (OR, RR, HR, etc.) are analyzed on the logarithmic scale. However, to remain consistent with IQWiG reporting conventions, they are labeled using their original metric names.
 
+# Global Performances
 
 ## Width of the confidence intervals
 
@@ -197,15 +260,10 @@ For each method, we summarize the distribution of **CI widths** (upper − lower
 ```{r}
 #| label: tbl-widths
 
-widths <- extract_ma_metric(cis, "width")
-
-table_width  <- compute_summary (widths, stats = "width")
-
-
-render_gt (table_width, title = "Confidence Interval Widths")
+table_width <- compute_summary(df_mas, stats = "width")
+render_gt(table_width, title = "Confidence Interval Widths")
 
 ```
-
 
 ### Width by effect measure
 
@@ -216,7 +274,7 @@ Widths stratified by effect measure
 
 
 width_summary <- compute_summary(
-  widths, 
+  df_mas, 
   stats = "width", 
   grouping = c("measure", "method"), 
   count_id = "MA"
@@ -240,7 +298,7 @@ For classic **Edgington** (Equal Weighting), each study contributes equally to t
 
 But **the more aggressively we penalize large standard errors** (moving from Unweighted $\rightarrow$ $1/SE$ $\rightarrow$ $1/SE^2$), the more you force the meta-analysis to *ignore uncertainty*. Basically we are giving more influence to certain data points and reducing the influence of uncertain ones.
 
----
+### Width by effect measure (plot)
 
 For a better visualization, the HK method is removed and ROM and RD are not plotted, since they only have respectively 1 and 6 observations.
 
@@ -252,7 +310,7 @@ For a better visualization, the HK method is removed and ROM and RD are not plot
 #| fig-height: 15
 #| fig-dpi: 300
 
-widths_noHK <- widths %>% 
+widths_noHK <- df_mas %>% 
   filter (method != "Hartung & Knapp") %>% 
   filter (measure != "ROM" & measure != "RD")
 
@@ -260,7 +318,6 @@ ggplot(widths_noHK, aes(x = method, y = width, fill = method)) +
   geom_boxplot(alpha = 0.7) +
   facet_wrap(~ measure, scales = "free_y") +
   labs(
-    title = "Distribution of Confidence Interval Widths Stratified by measure",
     x = "Method",
     y = "CI Width"
   ) +
@@ -282,7 +339,6 @@ ggplot(widths_noHK, aes(x = method, y = width, fill = method)) +
   ) +
   scale_fill_brewer(palette = "Set2")
 ```
-
 
 ::: {.callout-note icon="false"}
 **My take on why HK gives wild CI**
@@ -337,131 +393,120 @@ $$
 \left(\sum_{i=1}^{2} w_i\right)^{2}
 },
 $$
-
 :::
 
----
+### Relative Width Increase
 
-{{< pagebreak >}}
+$$
+\frac{\text{Width}_{\text{Method}} - \text{Width}_{\text{FE}}}{\text{Width}_{\text{FE}}} 
+$$ {#eq-relwidth}
 
-## Width of the CI compared to individual SE
+Basically, we are measuring **how much the interval is increasing with respect to FE.**
 
-Following my observation on the "staircase", I want to empirically prove that **using the weighting schemes, we tend to ignore the studies that are largely uncertain.** This mean that as the ratio of Standard Errors $\frac{max(SE)}{min(SE)}$ increases, Edgington will produces **wider intervals.** This because It is *"forced" to incorporate the high uncertainty (large SE) of the smaller study into the pooled p-value function.*
 
-At the same time, as $SE_{ratio}$ grows, the weigthed methods center their estimate and precision more and more exclusively on the "certain" study, **reducing the contribution of the high-variance study**.
-
-So we compute the **Pearson correlation between $SE_{ratio}$ and width** per method.
 
 ```{r}
-#| label: tbl-widths-vs-se
+#| label: tbl-relative-width-summary
 
-
-# prepare two Dfs taht will also be used later
-ma_ci_df <- bind_rows(
-  lapply(cis, function(x) {
-    x$ci %>% 
-      as.data.frame() %>% 
-      mutate (
-        estimate_ma = estimate,
-        lower_MA = lower,
-        upper_MA = upper,
-        width_MA = width,
-        significant_MA = significant,
-        MA = x$ma_id
-      ) %>% 
-      select (c(MA, method, estimate_ma,lower_MA, upper_MA, width_MA, significant_MA))
-  }) )
-
-
-input_df <- bind_rows(
-  lapply(cis, function(x) {
-    x$inputs %>%  
-      as.data.frame() %>% 
-      mutate (
-        MA = x$ma_id,
-        study = rownames(x$inputs),
-        input_estimate = estimate,
-        input_SE = SE,
-        input_lower = lower,
-        input_upper = upper,
-        input_width = width,
-        input_significant = significant 
-      ) %>% 
-      select (-c(estimate, SE, lower, upper, width, significant))
-  }))
-
-
-
-
-
-SEs_df <- input_df %>% 
-  group_by (MA) %>% 
-  summarise (
-    SE_1 = input_SE[1],
-    SE_2 = input_SE[2],
-    SE_ratio = max(input_SE) / min(input_SE),
-    .groups= "drop"
-  )
-
-merged_se_df <- left_join(ma_ci_df, SEs_df, by = "MA") 
-
-corr_df <- merged_se_df %>%
+summary_tab <- df_comparisons %>% 
   group_by(method) %>%
   summarise(
-    Pearson = cor(width_MA, SE_ratio, use = "complete.obs", method = "pearson"),
-    Spearman = cor(width_MA, SE_ratio, use = "complete.obs", method = "spearman"),
+    Mean_Increase = mean(rel_width_increase, na.rm = TRUE),
+    Median_Increase = median(rel_width_increase, na.rm = TRUE),
+    SD_Increase   = sd(rel_width_increase, na.rm = TRUE),
+    Q25_Increase  = quantile(rel_width_increase, 0.25, na.rm = TRUE),
+    Q75_Increase  = quantile(rel_width_increase, 0.75, na.rm = TRUE),
+    Min_Increase  = min(rel_width_increase, na.rm = TRUE),
+    Max_Increase  = max(rel_width_increase, na.rm = TRUE),
     .groups = "drop"
   )
 
-# Reshape the table
-corr_vec_df <- corr_df %>%
-  pivot_longer(
-    cols = c(Pearson, Spearman), 
-    names_to = "Metric", 
-    values_to = "Correlation"
-  ) %>%
-  pivot_wider(
-    names_from = method, 
-    values_from = Correlation
-  )
-
-# 3. Generate the formatted gt table
-corr_vec_df %>%
+summary_tab %>%
   gt() %>%
-  fmt_number(
-    columns = -Metric,
-    decimals = 3
-  ) %>%
   tab_header(
-    title = md("**Correlation between SE ratio and Width**"),
-  ) %>% 
-  cols_align(
-    align = "center",
-    columns = everything()
+    title = md("**Relative Width Increase distribution**")
+    ) %>%
+  cols_label(
+    method = "Method",
+    Mean_Increase = "Mean",
+    Median_Increase = "Median",
+    SD_Increase = "SD",
+    Q25_Increase = "Q25",
+    Q75_Increase = "Q75",
+    Min_Increase = "Min",
+    Max_Increase = "Max"
+  ) %>%
+  fmt_percent(
+    columns = -method, 
+    decimals = 2
+  ) %>%
+  data_color(
+    columns = Mean_Increase,
+    method = "numeric",
+    palette = "Reds" 
   ) %>%
   opt_stylize(style = 6, color = "blue")
-
 ```
 
+### Relative Width Increase stratified by measure
 
+```{r}
+#| label: tbl-rel-width-stratified-summary
 
+Rel_width_increase_summary <- compute_summary(
+  df_comparisons, 
+  stats = "rel_width_increase", 
+  grouping = c("measure", "method"), 
+  count_id = "MA"
+)
 
-{{< pagebreak >}}
+Rel_width_increase_summary %>%
+  filter(method != "Fixed effect") %>%
+  gt(groupname_col = "measure") %>%
+  cols_label(
+    method = "Method",
+    mean = "Mean % Increase",
+    median = "Median % Increase",
+    sd = "SD % Increase",
+    q25 = "25th % Increase",
+    q75 = "75th % Increase",
+    max = "Max % Increase",
+    min = "Min % Increase"
+  ) %>%
+  fmt_percent(
+    columns = c(mean, median, sd, q25, q75, max, min),
+    decimals = 2
+  ) %>% opt_stylize(style = 6, color = "blue") %>%
+  tab_options(row_group.background.color = "#E6E6E6")
+```
 
 ## p-values (for $H_0: \theta=0$)
+
+### p-values across methods
 
 Distribution of method-specific p-values for testing $H_0: \theta=0$
 
 *Note* the dashed line marks 0.05.
 
+
 ```{r}
-#| label: pvals-preparation
-
-pvals <- extract_ma_metric(cis, "p_0")
+#| label: tbl-pvals
 
 
-pvals %>%
-  ggplot(aes(x = method, y = p_0, fill = method)) +
+table_p0 <- compute_summary(df_mas, stats = "p_val")
+render_gt(table_p0, title = "P value distribution")
+
+ 
+```
+
+
+```{r}
+#| label: fig-pvals
+
+
+
+df_mas %>%
+  ggplot(aes(x = method, y = p_val, fill = method)) +
   geom_boxplot(alpha = 0.7, outlier.alpha = 0.3) +
   geom_hline(yintercept = 0.05, linetype = "dashed", color = "red", linewidth = 0.8) +
   scale_y_continuous(breaks = seq(0, 1, 0.1)) +
@@ -479,22 +524,11 @@ pvals %>%
 
 ```
 
-```{r}
-#| label: tbl-pvals
 
-
-
-table_p0 <- compute_summary(pvals, stats = "p_0")
-
-
-render_gt (table_p0, title = "P value distribution")
-
- 
-```
 
 This aligns with previous observations: since FE tends to produce the narrowest intervals, it is the **more "aggressive" at rejecting the null.**
 
-### Cumulative Distribution of P-values
+### ECDF of P-values
 
 In this graph the **ECDF** of p-values is plotted. The grey dashed line is the CDF of the Uniform distribution.
 
@@ -504,8 +538,8 @@ In this graph the **ECDF** of p-values is plotted. The grey dashed line is the C
 
 
 
-pvals %>%
-  ggplot(aes(x = p_0, color = method)) +
+df_mas %>%
+  ggplot(aes(x = p_val, color = method)) +
   stat_ecdf(geom = "step", linewidth = 1, alpha = 0.8) +
   geom_abline(intercept = 0, slope = 1, linetype = "dashed", 
               color = "gray40", linewidth = 0.8) +
@@ -528,78 +562,24 @@ pvals %>%
   
 ```
 
-{{< pagebreak >}}
-
-### P-value Comparison to Fixed Effect
+### Distribution of difference of p values across methods
 
 
-
-```{r}
-#| label: pvals-vs-FE-preparation
-
-pvals_wide <- pvals %>%
-  select(MA, method, p_0) %>%
-  pivot_wider(names_from = method, values_from = p_0)
-
-# Calculate differences from Fixed Effect
-only_fe <- pvals %>% 
-  filter(method == "Fixed effect") %>% 
-  select (MA, p_0_fe = p_0)
-
-pvals_diff <- pvals %>% 
-  left_join(
-    only_fe,
-    by = "MA"
-  ) %>% 
-  mutate (p_diff = p_0 - p_0_fe) %>% 
-  filter (method != "Fixed effect")
-```
-
-
-Here, each panel plots the FE p-values vs the p-value of the specific method.
-
-*Note*: if the $p_0$ were equal, points would distribute on the diagonal.
-
-**Each point is one meta-analysis.** Points below the diagonal indicate smaller p-values than fixed effect (less conservative), and points above indicate larger p-values (more conservative).
-
-```{r}
-#| label: fig-pvalue-vs-fe
-#| fig-height: 8
-
-pvals_diff %>% 
-  ggplot (aes(x = p_0_fe, y = p_0, color = method)) +
-  geom_point(alpha= 0.4, size = 1.5) +
-  geom_abline (intercept = 0, slope = 1, linetype = "dashed", color = "gray50", linewidth = 0.8) + 
-  facet_wrap (~method) + 
-  scale_x_continuous (breaks = seq(0,1, 0.2)) + 
-  scale_y_continuous(breaks = seq(0,1, 0.2)) + 
-  labs(
-    x = "P-value (Fixed Effect)",
-    y = "P-value (Method)",
-    title = "Method p-values vs Fixed Effect p-values"
-  ) +
-  theme(
-    legend.position = "none"
-  )
-```
-
-{{< pagebreak >}}
-
-### P-value Differences from Fixed Effect
+Now, we will compare each method's p-values with **Fixed Effect's p-values as baseline.**
 
 This table is similar to @tbl-pvals but with a focus on the difference $\Delta p = p_0 (method) - p_0 (FE)$ and showing the correlation between $p_0(method)$ and $p_0 (FE)$ .
 
 ```{r}
 #| label: tbl-pvals-differences
 
-pvals_diff %>%
+df_comparisons %>%
   group_by(method) %>%
   summarise(
     mean_diff = mean(p_diff, na.rm = TRUE),
     median_diff = median(p_diff, na.rm = TRUE),
     sd_diff = sd(p_diff, na.rm = TRUE),
-    pearson = cor(p_0, p_0_fe, method = "pearson", use = "complete.obs"),
-    spearman = cor(p_0, p_0_fe, method = "spearman", use = "complete.obs"),
+    pearson = cor(p_val, p_fe, method = "pearson", use = "complete.obs"),
+    spearman = cor(p_val, p_fe, method = "spearman", use = "complete.obs"),
     .groups = "drop"
   ) %>%
   gt() %>%
@@ -620,7 +600,7 @@ pvals_diff %>%
   ) %>%
   fmt_number(
     columns = c(mean_diff, median_diff, sd_diff, pearson, spearman),
-    decimals = 4
+    decimals = 2
   ) %>%
   cols_align(
     align = "center",
@@ -628,154 +608,37 @@ pvals_diff %>%
   ) %>%
   opt_stylize(style = 6, color = "blue")
 ```
-
-Quite interestingly, the **median difference equall zero.** (at least half of observation have 0 difference with FE method)
+Quite interestingly, the **median difference equall zero.** 
 
 However, the slightly higher **mean difference (0.02)** suggests that in a subset of cases, likely those w/ high study-level conflict, the Edgington method provides a more conservative p-value than the Fixed Effect model.
 
+### Distribution of difference of p values across methods (plot)
 
-### P values for different sign estimates
+Here, each panel plots the FE p-values vs the p-value of the specific method.
 
-To better inspect the problem, I statify between MAs that show **opposite signs of the effect estimates** (e.g. study 1 has positive estimate, while study 2 has negative estimate, or the opposite) and that show the same sign.
+*Note*: if the $p_0$ were equal, points would distribute on the diagonal.
 
-The idea is that in those scenarios, the Fixed Effect model remains dominated by the more precise study, maintaining statistical significance despite the contradictory evidence. While Edgington method will provide extremely high p values since the combination of two contrasting estimates will tend to not reject the null.
-
+**Each point is one meta-analysis.** Points below the diagonal indicate smaller p-values than fixed effect (less conservative), and points above indicate larger p-values (more conservative).
 ```{r}
-#| label: tbl-pvals-differences-inspection
+#| label: fig-pvalue-vs-fe
+#| fig-height: 8
 
-
-# Join p-value differences with the raw study inputs
-conflict_analysis <- pvals_diff %>%
-  filter(method != "Hartung & Knapp") %>%
-  left_join(input_df %>% 
-              group_by(MA) %>% 
-              summarise(
-                est_1 = input_estimate[1],
-                est_2 = input_estimate[2],
-                opposing_directions = (est_1 * est_2 < 0), # True if one is + and one is -
-                abs_diff = abs(est_1 - est_2)
-              ), by = "MA")
-
-# Look at the Mean p_diff when studies conflict vs when they agree
-conflict_summary <- conflict_analysis %>%
-  group_by(method, opposing_directions) %>%
-  summarise(
-    n = n(),
-    mean_delta_p = mean(p_diff),
-    median_delta_p = median(p_diff),
-    .groups = "drop"
-  )
-
-
-tab_dat <- conflict_summary %>%
-  mutate(
-    Sign = ifelse(opposing_directions, "Opposite", "Same")
-  ) %>%
-  select(method, Sign, n, mean_delta_p, median_delta_p) %>%
-  group_by(method) %>%
-  mutate(
-    method = ifelse(row_number() == 1, method, "")
-  ) %>%
-  ungroup()
-
-tab_dat %>%
-  gt() %>%
-  cols_label(
-    method = "Method",
-    Sign = "Sign",
-    n = "N",
-    mean_delta_p = "Mean Δ",
-    median_delta_p = "Median Δ"
-  ) %>%
-  fmt_number(
-    columns = c(mean_delta_p, median_delta_p),
-    decimals = 3
-  ) %>%
-  cols_align(
-    align = "center",
-    columns = -c(method, Sign)
-  ) %>%
-  opt_stylize(style = 6, color = "blue")
-```
-
-
-
-This proves empirically that Edgington is a safer method (provides larger p values) when the sings of estimates are opposite. Interestingly, when the signs agree, Edgington p values tend to be **slighly** smaller.
-
-Note also that the magnitude of the divergence decreases as the weighting scheme becomes more aggressive.
-
----
-
-
-```{r}
-#| label: fig-directions
-
-
-plot_data <- pvals_diff %>%
-  filter(method == "Edgington") %>%
-  left_join(input_df %>% 
-              group_by(MA) %>% 
-              summarise(
-                conflict = ifelse(input_estimate[1] * input_estimate[2] < 0, 
-                                 "Directional Conflict", "Consistent Direction"),
-                .groups = "drop"
-              ), by = "MA")
-
-# 2. Generate the Scatter Plot
-ggplot(plot_data, aes(x = p_0_fe, y = p_0, color = conflict)) +
-  geom_point(alpha = 0.4, size = 1.5) +
-  geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "grey30") + # Identity line
-  scale_color_manual(values = c("Consistent Direction" = "#34495e", 
-                               "Directional Conflict" = "#e74c3c")) +
-  theme_minimal() +
+df_comparisons %>% 
+  ggplot (aes(x = p_fe, y = p_val, color = method)) +
+  geom_point(alpha= 0.4, size = 1.5) +
+  geom_abline (intercept = 0, slope = 1, linetype = "dashed", color = "gray50", linewidth = 0.8) + 
+  facet_wrap (~method) + 
+  scale_x_continuous (breaks = seq(0,1, 0.2)) + 
+  scale_y_continuous(breaks = seq(0,1, 0.2)) + 
   labs(
-    x = "Fixed Effect P-value",
-    y = "Edgington P-value",
-    color = "Sign Alignment",
-    title = " P values for different sign estimates"
+    x = "P-value (Fixed Effect)",
+    y = "P-value (Method)",
+    title = "Method p-values vs Fixed Effect p-values"
   ) +
   theme(
-    legend.position = "bottom",
-    plot.title = element_text(face = "bold")
+    legend.position = "none"
   )
 ```
-
----
-
-Here just for visual understanding I display the 10 most conflicted MAs.
-
-```{r}
-#| label: tbl-pvals-extreme-cases
-
-
-# Extract the Top 10 most "conflicted" MAs to showcase in a table
-extreme_conflicts <- conflict_analysis %>%
-  filter(opposing_directions == TRUE) %>%
-  arrange(desc(p_diff)) %>%
-  slice_head(n = 10)
-
-extreme_conflicts %>%
-  select(MA, measure, `p_0`, p_0_fe, p_diff, est_1, est_2, abs_diff) %>%
-  gt() %>%
-  cols_label(
-    MA = "MA",
-    measure = "Measure",
-    p_0 = "p-val Edgington",
-    p_0_fe = "p-val FE",
-    p_diff = "p-val difference",
-    est_1 = "Estimate study 1",
-    est_2 = "Estimate study 2",
-    abs_diff = "|Est 1 − Est 2|"
-  ) %>%
-  fmt_number(
-    columns = c(p_0, p_0_fe, p_diff,est_1, est_2, abs_diff),
-    decimals = 3
-  )
-
-
-```
-
-{{< pagebreak >}}
 
 ### Agreement in Significance (p \< 0.05)
 
@@ -789,11 +652,11 @@ Each meta-analysis is classified into **four categories:** both significant, bot
 
 
 
-sign_agree_p <- pvals_diff %>% 
+sign_agree_p <- df_comparisons %>% 
   group_by(method) %>% 
   mutate (
-    Method_sign = p_0 <0.05,
-    FE_sign = p_0_fe <0.05, 
+    Method_sign = p_val <0.05,
+    FE_sign = p_fe <0.05, 
     agreement = ifelse(FE_sign & Method_sign, "Both significant",
                        ifelse(!FE_sign & !Method_sign, "Both non-significant",
                               ifelse(FE_sign & !Method_sign, "FE sig, Method non-sig", 
@@ -868,25 +731,955 @@ sign_agree_p %>%
   opt_stylize(style = 6, color = "blue")
 ```
 
-Thus, this shows that classic Edgington is the most independent by FE, disagreeing with it in 89 cases ($7.2\%$), whereas the weighting progressively reduces this disagreement. Notably, 25 times Edgington was significant while FE not, **this strengthen the idea that it is not only a more conservative test.**  
+Thus, this shows that classic Edgington is the most independent by FE, disagreeing with it in 89 cases ($7.2\%$), whereas the weighting progressively reduces this disagreement. Notably, 25 times Edgington was significant while FE not, **this strengthen the idea that it is not only a more conservative test.**
 
-{{< pagebreak >}}
 
+## Point Estimates (Shrinkage Ratio)
+
+Inspecting the Estimates (the point which has the highest p-value) provided by each method
+
+```{r}
+#| label: tbl-estimates
+
+
+table_estimates <- compute_summary(df_mas, stats = "estimate")
+render_gt (table_estimates, title = "Estimates")
+```
+
+### Agreement of sign of Estimates
+
+Comparison of the **direction** of each method’s estimate with the **Fixed Effect** one.
+
+For each method, we summarisethe proportion of meta-analyses where the method has the same sign as FE and the proportion with a flipped sign relative to FE, **among all meta-analyses**
+
+```{r}
+#| label: tbl-agreement-estimates
+
+
+
+summ_long_vs_FE <- df_comparisons %>%
+  group_by(method) %>%
+  summarise(
+    n_total = n(),
+    # "sign_flip" is TRUE if signs differ, FALSE if they are the same
+    prop_same_sign = mean(!sign_flip, na.rm = TRUE) * 100,
+    prop_flip_sign = mean(sign_flip, na.rm = TRUE) * 100,
+    .groups = "drop"
+  )
+
+summ_long_vs_FE %>%
+  gt() %>%
+  tab_header(
+    title = md("**Agreement of sign with Fixed Effect**")
+  ) %>%
+  cols_label(
+    method = "Method",
+    n_total = "N studies",
+    prop_same_sign = "Same sign as FE (%)",
+    prop_flip_sign = "Sign flip vs FE (%)",
+  ) %>%
+  fmt_number(
+    columns = c(prop_same_sign, prop_flip_sign),
+    decimals = 2
+  ) %>%
+  fmt_number(
+    columns = c(n_total),
+    decimals = 0,
+    use_seps = TRUE
+  ) %>%
+  cols_align(
+    align = "center",
+    columns = -method
+  ) %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_column_labels()
+  ) %>%
+  opt_stylize(style = 6, color = "blue")
+
+```
+
+### Shrinkage ratio
+
+$$SR = \frac {\hat{\mu}_{\text{method}}}  {\hat{\mu}_{\text{FE}}}$$
+
+Negative values of SR indicate a **sign flip** relative to FE, while positive values indicate agreement in direction. Among positive ratios, values between 0 and 1 correspond to **shrinkage toward zero** relative to FE, and values larger than 1 indicate **more extreme estimates** than FE. Finally, value equal to 1 (using the tolerance) indicate that the two methods provide the same estimate.
+
+We **exclude** meta analysis where $|\hat{\mu}_{\text{FE}} | < tol$ (i.e., where the Fixed Effect estimate is effectively zero), as the ratio is undefined in these cases.
+
+For each method, we report how often estimates flip sign, how often they are shrunken toward zero, how often they are more extreme than FE.
+
+```{r}
+#| label: tbl-SR-summary1
+#   SHRINKAGE RATIO SR = method / FE  
+
+
+ratio_summary <- df_comparisons %>%
+  # Filter out undefined ratios (where FE was close to 0)
+  filter(!is.na(shrinkage_ratio)) %>%
+  mutate(
+    SR_class = case_when(
+      abs(shrinkage_ratio - 1) < 1e-6 ~ "Equal (SR=1)",
+      shrinkage_ratio < 0 ~ "Flip sign (SR<0)",
+      shrinkage_ratio >= 0 & shrinkage_ratio < 1 ~ "Shrink toward 0",
+      shrinkage_ratio > 1 ~ "More extreme (SR>1)"
+    )
+  ) %>%
+  group_by(method) %>%
+  summarise(
+    n = n(),
+    prop_flip = mean(SR_class == "Flip sign (SR<0)") * 100,
+    prop_shrink = mean(SR_class == "Shrink toward 0") * 100,
+    prop_more_extreme = mean(SR_class == "More extreme (SR>1)") * 100,
+    prop_exactly_same = mean(SR_class == "Equal (SR=1)") * 100
+  )
+
+ratio_summary %>% 
+  gt() %>%
+  tab_header(
+    title = md("**Shrinkage ratio summary**"),
+  ) %>%
+  cols_label(
+    method = "Method",
+    n = "N MA",
+    prop_flip = "Flipped signs (%)",
+    prop_shrink = "Shrinked estimates(%)",
+    prop_more_extreme = "More extreme estimates (%)",
+    prop_exactly_same = "Same estimates (%)"
+    ) %>%
+  fmt_number(
+    columns = c(prop_flip, prop_shrink, prop_more_extreme, prop_exactly_same),
+    decimals = 2
+  ) %>% 
+  cols_align(
+    align = "center",
+    columns = -method
+  ) %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_column_labels()
+  ) %>%
+  opt_stylize(style = 6, color = "blue") 
+
+```
+
+**NOTE**: Ratios were undefined for `r sum(is.na(df_comparisons$shrinkage_ratio)) / length(unique(df_comparisons$method))` MA, where the Fixed Effect estimate was effectively zero ($|\hat{\mu}_{FE}| < 10^{-6}$); these cases were excluded from the shrinkage summary."
+
+```{r}
+#| label: tbl-SR-summary2
+
+
+sr_global <- df_comparisons %>%
+  filter(!is.na(shrinkage_ratio)) %>%
+  group_by(method) %>%
+  summarise(
+    Studies = n(),
+    Mean   = mean(shrinkage_ratio),
+    SD     = sd(shrinkage_ratio),
+    Median = median(shrinkage_ratio),
+    Q25    = quantile(shrinkage_ratio, 0.25),
+    Q75    = quantile(shrinkage_ratio, 0.75),
+    Min    = min(shrinkage_ratio),
+    Max    = max(shrinkage_ratio)
+  )
+
+sr_global %>%
+  gt() %>%
+  tab_header(
+    title = md("**Distribution of Shrinkage Ratios (Method / FE)**"),
+    subtitle = "Values < 1 indicate shrinkage toward zero. Values < 0 indicate sign flip."
+  ) %>%
+  cols_label(method = "Method") %>%
+  fmt_number(
+    columns = c(Mean, SD, Median, Q25, Q75, Min, Max),
+    decimals = 2
+  ) %>%
+  cols_align(align = "center", columns = -method) %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_column_labels()
+  ) %>%
+  opt_stylize(style = 6, color = "blue")
+```
+
+Median equal 1 is promising
+
+### Stratified Shrinkage Ratio
+
+```{r}
+#| label: tbl-SR-stratified
+
+
+sr_stratified <- compute_summary(
+  df_comparisons, 
+  stats = "shrinkage_ratio", 
+  grouping = c("measure", "method"), 
+  count_id = "MA"
+)
+
+render_gt(
+  sr_stratified,
+  title = "Shrinkage Ratio Distribution by Effect Measure",
+  group_col = "measure", decimals = 2
+  )
+```
+
+# Conflict in Precision
+
+Define $$SE_{ratio} = \frac{max(SE)}{min(SE)}$$
+
+In this section we want to inspect how different methods behaves as the $SE_{ratio}$ of the **singular studies** increases.
+
+## Width vs SE_ratio
+
+**Does the method widen the interval when one study is much less precise than the other?**
+
+
+```{r}
+#| label: tbl-widths-vs-se
+
+# Join results with inputs to get SE_ratio
+merged_res_inp <- df_mas %>%
+  left_join(df_inputs, by = "MA")
+
+
+corr_df <- merged_res_inp %>%
+  group_by(method) %>%
+  summarise(
+    Pearson = cor(width, SE_ratio, use = "complete.obs", method = "pearson"),
+    Spearman = cor(width, SE_ratio, use = "complete.obs", method = "spearman")
+  )
+
+# Reshape the table
+corr_vec_df <- corr_df %>%
+  pivot_longer(
+    cols = c(Pearson, Spearman), 
+    names_to = "Metric", 
+    values_to = "Correlation"
+  ) %>%
+  pivot_wider(
+    names_from = method, 
+    values_from = Correlation
+  )
+
+corr_vec_df %>%
+  gt() %>%
+  fmt_number(
+    columns = -Metric,
+    decimals = 2
+  ) %>%
+  tab_header(
+    title = md("**Correlation between SE ratio and Width**"),
+  ) %>% 
+  cols_align(
+    align = "center",
+    columns = everything()
+  ) %>%
+  opt_stylize(style = 6, color = "red")
+
+```
+
+### What about the Relative Width increase? 
+
+```{r}
+merged_comp_inp <- df_comparisons %>% 
+  left_join(df_inputs, by = "MA")
+
+corr_df <- merged_comp_inp %>%
+  group_by(method) %>%
+  summarise(
+    Pearson = cor(rel_width_increase, SE_ratio, use = "complete.obs", method = "pearson"),
+    Spearman = cor(rel_width_increase, SE_ratio, use = "complete.obs", method = "spearman")
+  )
+
+# Reshape the table
+corr_vec_df <- corr_df %>%
+  pivot_longer(
+    cols = c(Pearson, Spearman), 
+    names_to = "Metric", 
+    values_to = "Correlation"
+  ) %>%
+  pivot_wider(
+    names_from = method, 
+    values_from = Correlation
+  )
+
+corr_vec_df %>%
+  gt() %>%
+  fmt_number(
+    columns = -Metric,
+    decimals = 2
+  ) %>%
+  tab_header(
+    title = md("**Correlation between SE ratio and Relative Width Increase**"),
+  ) %>% 
+  cols_align(
+    align = "center",
+    columns = everything()
+  ) %>%
+  opt_stylize(style = 6, color = "red")
+```
+
+
+This mean that as $SE_{ratio}$ increases, **Edgington will produces wider intervals**. This because it is "forced" to incorporate the high uncertainty (large SE) of the smaller study into the pooled p-value function.
+
+At the same time, as $SE_{ratio}$ grows, the weigthed methods center their estimate and precision more and more exclusively on the "certain" study, reducing the contribution of the high-variance study
+
+
+## p-value difference vs SE ratio 
+Recall that $\Delta p = p_0 (method) - p_0 (FE)$ 
+
+
+```{r}
+#| label: tbl-pvals-vs-se-ratio
+
+
+corr_p_se <- merged_comp_inp %>%
+  group_by(method) %>%
+  summarise(
+    Pearson = cor(p_diff, SE_ratio, use = "complete.obs", method = "pearson"),
+    Spearman = cor(p_diff, SE_ratio, use = "complete.obs", method = "spearman"),
+    .groups = "drop"
+  )
+
+# Generate table
+corr_p_se %>%
+  pivot_longer(cols = c(Pearson, Spearman), names_to = "Metric", values_to = "Correlation") %>%
+  pivot_wider(names_from = method, values_from = Correlation) %>%
+  gt() %>%
+  fmt_number(columns = -Metric, decimals = 2) %>%
+  tab_header(
+    title = md("**Correlation between SE Ratio and P-value Difference (Δp)**")
+  ) %>% 
+  cols_align(align = "center", columns = everything()) %>%
+  opt_stylize(style = 6, color = "red")
+```
+
+All the values are extremely close to zero: this seems to be good news! The fact that the studies have very different variability, doesn't influence our conclusions on significance.
+
+
+# Conflict in Direction
+In this section, we stratify between MAs that show **opposite signs of the effect estimates** (e.g. study 1 has positive estimate, while study 2 has negative estimate, or the opposite) and that show the same sign.
+
+## Sign flips vs Relative Width Increase
+
+The idea is that if the method is sensitive to directional conflict, the relative width increase should be significantly higher for "Opposite Sign" cases.
+
+```{r}
+#| label: tbl-width-differences-inspection
+
+
+conflict_width_data <- df_comparisons %>%
+  filter(method %in% c("Edgington", "Edgington (1/SE)", "Edgington (1/SE^2)")) %>%
+  left_join(df_inputs, by = "MA") %>%
+  mutate(
+    Alignment = ifelse(opposing_directions, "Opposite Sign", "Same Sign")
+  )
+
+
+width_conflict_summary <- conflict_width_data %>%
+  group_by(method, Alignment) %>%
+  summarise(
+    n = n(),
+    mean_rel_increase = mean(rel_width_increase),
+    median_rel_increase = median(rel_width_increase),
+    .groups = "drop"
+  )
+
+# format table nice
+tab_width_dat <- width_conflict_summary %>%
+  select(method, Alignment, n, mean_rel_increase, median_rel_increase) %>%
+  group_by(method) %>%
+  mutate(
+    method = ifelse(row_number() == 1, as.character(method), "")
+  ) %>%
+  ungroup()
+
+tab_width_dat %>%
+  gt() %>%
+  cols_label(
+    method = "Method",
+    Alignment = "Sign",
+    n = "N",
+    mean_rel_increase = "Mean Rel. Increase",
+    median_rel_increase = "Median Rel. Increase"
+  ) %>%
+  fmt_percent(
+    columns = c(mean_rel_increase, median_rel_increase),
+    decimals = 2
+  ) %>%
+    tab_header(
+    title = md("**Sign vs Relative Width Increase**")
+  ) %>% 
+  cols_align(
+    align = "center",
+    columns = -c(method, Alignment)
+  ) %>%
+  opt_stylize(style = 6, color = "red") 
+```
+
+
+```{r}
+#| label: fig-rel-width-conflict
+
+
+ggplot(conflict_width_data, aes(x = method, y = rel_width_increase, fill = Alignment)) +
+  geom_boxplot(alpha = 0.8, outlier.size = 1, outlier.alpha = 0.4) +
+  scale_fill_manual(values = c("Same Sign" = "#34495e", "Opposite Sign" = "red")) +
+  scale_y_continuous(trans = "log1p", labels = scales::percent) +
+  theme_bw() +
+  labs(
+    y = "Relative Width Increase vs. Fixed Effect (log1p scale)",
+    fill = "Study Alignment",
+  ) +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold", size = 16),
+    axis.title = element_text(size = 12),
+    axis.text.x = element_text(size = 12),
+    legend.title = element_text(size = 12),
+    legend.text = element_text(size = 12)
+  )
+```
+
+
+
+## Sign flips p value difference
+
+
+```{r}
+#| label: tbl-pvals-differences-inspection
+
+
+conflict_analysis <- df_comparisons %>%
+  filter(method != "Hartung & Knapp") %>%
+  left_join(df_inputs, by = "MA")
+
+conflict_summary <- conflict_analysis %>%
+  group_by(method, opposing_directions) %>%
+  summarise(
+    n = n(),
+    mean_delta_p = mean(p_diff),
+    median_delta_p = median(p_diff)
+  )
+
+
+tab_dat <- conflict_summary %>%
+  mutate(
+    Sign = ifelse(opposing_directions, "Opposite", "Same")
+  ) %>%
+  select(method, Sign, n, mean_delta_p, median_delta_p) %>%
+  group_by(method) %>%
+  mutate(
+    method = ifelse(row_number() == 1, method, "")
+  ) %>%
+  ungroup()
+
+tab_dat %>%
+  gt() %>%
+  cols_label(
+    method = "Method",
+    Sign = "Sign",
+    n = "N",
+    mean_delta_p = "Mean Δ",
+    median_delta_p = "Median Δ"
+  ) %>%
+  fmt_number(
+    columns = c(mean_delta_p, median_delta_p),
+    decimals = 2
+  ) %>%
+      tab_header(
+    title = md("**Sign vs p vals difference**")
+  ) %>% 
+  cols_align(
+    align = "center",
+    columns = -c(method, Sign)
+  ) %>%
+  opt_stylize(style = 6, color = "red")
+```
+
+```{r}
+#| label: fig-directions
+
+
+
+plot_data <- df_comparisons %>%
+  filter(method == "Edgington") %>%
+  left_join(df_inputs, by = "MA") %>%
+  mutate(
+    conflict = ifelse(opposing_directions, "Directional Conflict", "Consistent Direction")
+  )
+
+
+ggplot(plot_data, aes(x = p_fe, y = p_val, color = conflict)) +
+  geom_point(alpha = 0.4, size = 1.5) +
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "grey30") + # Identity line
+  scale_color_manual(values = c("Consistent Direction" = "#34495e", 
+                               "Directional Conflict" = "red")) +
+  theme_bw() +
+  labs(
+    x = "Fixed Effect P-value",
+    y = "Edgington P-value",
+    color = "Sign Alignment",
+    title = " P values for different sign estimates"
+  ) +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold")
+  )
+```
+
+Here just for visual understanding I display the 10 most conflicted MAs.
+
+
+```{r}
+#| label: tbl-pvals-extreme-cases
+
+extreme_conflicts <- conflict_analysis %>%
+  filter(opposing_directions == TRUE) %>%
+  arrange(desc(p_diff)) %>%
+  slice_head(n = 10)
+
+extreme_conflicts %>%
+  select(MA, measure, p_val, p_fe, p_diff, est_1, est_2, SE_ratio) %>%
+  gt() %>%
+  cols_label(
+    MA = "MA",
+    measure = "Measure",
+    p_val = "p-val Edgington",
+    p_fe = "p-val FE",
+    p_diff = "p-val difference",
+    est_1 = "Estimate study 1",
+    est_2 = "Estimate study 2",
+    SE_ratio = "SE ratio"
+  ) %>%
+  fmt_number(
+    columns = c(p_val, p_fe, p_diff,est_1, est_2, SE_ratio),
+    decimals = 2
+  )
+```
+
+# Heterogeneity
+**Cochran's** $Q$ $$Q = \sum_{i=1}^{k} w_i (\hat{\theta}_i - \hat{\theta}_{FE})^2$$where $k$ is the number of studies (here $k=2$), and $w_i = 1/\sigma_i^2$. Under the null hypothesis of homogeneity, $Q$ follows a $\chi^2$ distribution with $k-1$ degrees of freedom.
+
+**Inconsistency Index** ($I^2$) Describes the percentage of variation across studies that is due to heterogeneity rather than chance.$$I^2 = \max\left(0, \frac{Q - (k - 1)}{Q}\right) \times 100\%$$
+
+**Between-study Variance** ($\tau^2$) estimated using REML
+
+**Note** 
+
+Under homogeneity ($\tau^2 = 0$), we have $\theta_i \sim N(\mu, v_i)$. Then $\theta_1 - \theta_2 \sim N(0, v_1 + v_2)$, so $Q = \frac{(\theta_1 - \theta_2)^2}{v_1 + v_2} \sim \chi^2_1$.
+And under $H_0$ we have ${Q \sim \chi^2_1}$. 
+
+This is a Z test... i.e. $Q = Z^2$
+
+
+Critical value at $\alpha = 0.05$: $3.84$.
+So you reject iff $|\theta_1 - \theta_2| > \sqrt{3.84 (v_1 + v_2)}$.
+
+```{r}
+summary_hetero <- df_mas %>% 
+  summarise(
+    total = n()/length(unique(df_mas$method)),
+    avg_Q = mean(Q),
+    avg_I2 = mean(I2),
+    avg_tau = mean(Tau2),
+    .groups = "drop"
+  )
+
+summary_hetero %>%
+  gt() %>%
+  cols_label(
+    total = "Total MA",
+    avg_Q = "Average Q value",
+    avg_I2 = "Average I2 value",
+    avg_tau = "Average tau value"
+  ) %>%
+  fmt_number(
+    columns = c(avg_Q,avg_I2, avg_tau),
+    decimals = 2
+  ) %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_column_labels()
+  ) %>%
+  opt_stylize(style = 6, color = "red")
+```
+
+## Heterogeneity summary
+
+Full graph on the above, with a zoomed-in view below due to the outliers that ruin the visualisation. Data are reported on the square root scale.
+
+```{r}
+#| label: fig-heterogeneity-stratified
+#| fig-height: 6
+
+# We take unique MA rows to avoid counting Q multiple times
+q_unique <- df_mas %>% 
+  distinct(MA, .keep_all = TRUE)
+
+
+#use the ggforce package --> facet_zoom allow us to zoom in
+
+
+ggplot(q_unique, aes(x = Q, y = measure, color = measure)) +
+  geom_boxplot(outlier.shape = NA, width = 0.5, alpha = 0.5) + 
+  geom_jitter(height = 0.1, alpha = 0.5, size = 1) +
+  
+  scale_x_sqrt(
+    breaks = c(0, 10, 50, 100, 200, 500), 
+    name = "Cochran's Q (Scale sqrt)"
+  ) +
+  
+  # Note: xlim in facet_zoom must use original Q values 
+  facet_zoom(xlim = c(0, 20), zoom.size = 1) + 
+  
+  theme_bw() +
+  theme(
+    legend.position = "none" 
+  )
+
+```
+
+**NOTE**, there is a huge outlier, with id "*A20-93 \|\| Abb. 12 \|\| HbA1c*". It has a Q-statistics = 570.95.
+
+
+## Correlation with Cochran's Q
+
+```{r}
+#| label: tbl-Q-vs-width-pvals
+
+df_mas %>%
+  group_by(method) %>%
+  summarise(
+    Cor_Q_Width = cor(Q, width, method = "spearman", use = "complete.obs"),
+    Cor_Q_Width_p  = cor(Q, width, method = "pearson", use = "complete.obs"),
+    Cor_Q_Pval  = cor(Q, p_val, method = "spearman", use = "complete.obs"),
+    Cor_Q_Pval_p  = cor(Q, p_val, method = "pearson", use = "complete.obs"),
+    .groups = "drop"
+  ) %>%
+  gt() %>%
+  tab_header(
+    title = md("**Correlation with Heterogeneity**"),
+  ) %>%
+  cols_label(
+    method = "Method",
+    Cor_Q_Width = "Corr(Q, Width) Spearman",
+    Cor_Q_Width_p = "Corr(Q, Width) Pearson", 
+    Cor_Q_Pval = "Corr(Q, P-val) Spearman", 
+    Cor_Q_Pval_p  = "Corr(Q, P-val) Pearson"
+  ) %>%
+  fmt_number(columns = starts_with("Cor"), decimals = 2) %>%
+  data_color(
+    columns = starts_with("Cor"),
+    method = "numeric",
+    palette = "RdBu", # Red-Blue diverging palette
+    domain = c(-1, 1)
+  ) %>%
+  opt_stylize(style = 6, color = "red")
+```
+
+The positive correlation shows that **Edgington "adapts":** When $Q$ increases (meaning studies are moving apart), the Edgington confidence interval widens to account for that conflict.
+
+The large gap between Pearson and Spearman suggests that the relationship between heterogeneity and Edgington width is *not linear,* but it is monotonic. (e.g. Edgington doesn't widen in a straight line as $Q$ grows; but maybe stays stable for a while and then "reacts" more strongly once Q reaches a certain threshold)
+
+
+The correlations between $Q$ and P-values for Edgington methods are essentially zero. This suggests that while Edgington widens its uncertainty (Width) when studies disagree, it doesn't necessarily lose its ability to find an effect (P-value) just because the studies are heterogeneous.
+In contrast,  FE: has a negative Spearman correlation. This suggests that as studies move apart ($Q$ increases), the p-value actually tends to get "smaller" (more significant). 
+
+Thus, in this context, Edgington appears more stable. 
+
+
+## Relative width increase vs Q
+
+We plot Relative width increase [@eq-relwidth] against Cochran's $Q$ to show how methods respond to heterogeneity. A positive value indicates a penalty for heterogeneity: as the study estimates diverge, the method produces a wider (more conservative) interval.
+
+On the right, all methods are plotted together, on the right, to better inspection, the HK method is removed.
+
+**This plot uses the LOESS smoother**. This can be misleading, it is just to detect a general trend, next plots will inspect deeper.
+
+**IMPORTANT** I often use *log1p scale*, i.e. $log1p(x)=log(1+x)$
+
+```{r}
+#| label: fig-q-vs-rel-width
+#| fig-height: 15
+#| fig-width: 20
+
+#add the panels
+data_all <- df_comparisons %>% mutate(panel = "All Methods")
+data_no_hk <- df_comparisons %>% 
+  filter(method != "Hartung & Knapp") %>% 
+  mutate(panel = "Excluding HK")
+
+combined_data <- bind_rows(data_all, data_no_hk)
+
+
+ggplot(combined_data, aes(x = Q, y = rel_width_increase, color = method)) +
+  geom_smooth(formula = y ~ x, method = "loess", se = FALSE, linewidth = 1.2) + 
+  
+  facet_wrap(~panel, scales = "free_y") +
+  
+  scale_x_sqrt(
+    breaks = c(0, 10, 50, 100, 200, 400),
+    name = "Cochran's Q (sqrt scale)"
+  )  + 
+  scale_y_continuous(trans = "log1p", labels = scales::percent, 
+      name = "Rel. Width Increase (log1p Scale)")+
+  theme_bw() +
+  theme(
+    strip.background = element_rect(fill = "lightblue"),
+    strip.text = element_text(face = "bold", size = 30),
+    axis.title.x = element_text(size = 25), 
+    axis.title.y = element_text(size = 25), 
+    axis.text.x  = element_text(size = 20), 
+    axis.text.y  = element_text(size = 20),      
+    legend.position = "bottom",
+    legend.title = element_text(size = 25), 
+    legend.text  = element_text(size = 25)  
+  )
+```
+
+
+```{r}
+#| label: tbl-relative-width-summary-Q
+
+
+summary_tab <- df_comparisons%>%
+ filter (method != "Fixed effect") %>% 
+  group_by(method) %>%
+  summarise(
+    Mean_Increase = mean(rel_width_increase, na.rm = TRUE),
+    Median_Increase = median(rel_width_increase, na.rm = TRUE),
+    cor_spear = cor(Q, rel_width_increase, method = "spearman"),
+    cor_pear = cor(Q, rel_width_increase, method = "pearson"),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(Mean_Increase))
+
+summary_tab %>%
+  gt() %>%
+  tab_header(
+    title = md("**Performance vs Fixed Effect**")
+  ) %>%
+  cols_label(
+    method = "Method",
+    Mean_Increase = "Mean % Increase",
+    Median_Increase = "Median % Increase",
+    cor_spear = "Corr(Q, Increase)[Spearman]", 
+    cor_pear = "Corr(Q, Increase)[Pearson]"
+  ) %>%
+  fmt_percent(
+    columns = c(Mean_Increase, Median_Increase),
+    decimals = 2
+  ) %>%
+  fmt_number(
+    columns = c(cor_spear, cor_pear),
+    decimals = 2
+  ) %>%
+  data_color(
+    columns = Mean_Increase,
+    method = "numeric",
+    palette = "Reds" 
+  ) %>%
+  data_color(
+    columns = c(cor_spear, cor_pear),
+    method = "numeric",
+    palette = "Blues",
+    domain = c(0, 1) 
+  ) %>%
+  opt_stylize(style = 6, color = "blue")
+```
+
+Edgington with a Mean % Increase of 39.7% and a Median of 11.0%, is highly sensitive to study-level conflict.
+On the other hand, the weighted with $1/SE^2$ shows a near perfect Spearman correlation, but the magnitude of the actual penalty is smaller  (Mean = 15.0% Median = 0.0% )
+
+
+**Note**:
+Cochran’s $Q$ is fundamentally an inverse-variance weighted statistic ($w_i = 1/SE^2$). Because weighted Edgington uses this exact same weighting scheme, they are strongly correlated. 
+
+
+
+## Stratified Heterogeneity Analysis
+
+```{r}
+#| label: fig-rel_width_stratified
+#| fig-width: 16
+#| fig-height: 20
+#| fig-dpi: 300
+
+#remove ROM, RD and IDR 
+data_clean <- data_no_hk %>% 
+  filter(measure != "ROM" & measure != "RD" & measure != "IDR")
+
+ggplot(data_clean, aes(x = Q, y = rel_width_increase, color = method)) +
+    #geom_smooth(formula = y ~ x, method = "loess", se = FALSE, linewidth = 1.2) +
+    geom_point() +
+    facet_wrap(~ measure, scales = "free") +
+    scale_x_sqrt(name = "Cochran's Q (sqrt scale)") +
+    scale_y_continuous(
+      trans = "log1p",
+      labels = scales::percent,
+      name = "Rel. Width Increase (log1p Scale)")+
+    theme_bw() +
+    theme(
+    strip.background = element_rect(fill = "lightblue"),
+    strip.text = element_text(face = "bold", size = 23),
+    axis.title.x = element_text(size = 17), 
+    axis.title.y = element_text(size = 17), 
+    axis.text.x  = element_text(size = 12), 
+    axis.text.y  = element_text(size = 12),      
+    legend.position = "bottom",
+    legend.title = element_text(size = 17), 
+    legend.text  = element_text(size = 17) 
+    )
+```
+
+```{r}
+#| label: tbl-rel_width_stratified
+
+summary_tab_strat <- df_comparisons %>%
+  filter(method != "Fixed effect") %>%
+  group_by(measure) %>%
+  mutate(n_ma = n_distinct(MA)) %>% 
+  group_by(measure, method, n_ma) %>%
+  summarise(
+    Mean_Increase = mean(rel_width_increase),
+    Median_Increase = median(rel_width_increase),
+    cor_spear = cor(Q, rel_width_increase, method = "spearman"),
+    cor_pear = cor(Q, rel_width_increase, method = "pearson"),
+    .groups = "drop"
+  ) %>%
+  mutate(measure = paste0(measure, " (N = ", n_ma, ")"))  %>%
+  arrange(measure, desc(Mean_Increase))
+
+summary_tab_strat %>%
+  select (-n_ma) %>% 
+  gt(groupname_col = "measure") %>%
+  tab_header(
+    title = md("**Sensitivity to Heterogeneity by Measure**")
+  ) %>%
+  cols_label(
+    method = "Method",
+    Mean_Increase = "Mean % Increase",
+    Median_Increase = "Median % Increase",
+    cor_spear = "Corr(Q, Incr) [Spearman]", 
+    cor_pear = "Corr(Q, Incr) [Pearson]"
+  ) %>%
+  fmt_percent(
+    columns = c(Mean_Increase, Median_Increase),
+    decimals = 2
+  ) %>%
+  fmt_number(
+    columns = c(cor_spear, cor_pear),
+    decimals = 2
+  ) %>%
+  data_color(
+    columns = Mean_Increase,
+    method = "numeric",
+    palette = "Reds" 
+  ) %>%
+  data_color(
+    columns = c(cor_spear, cor_pear),
+    method = "numeric",
+    palette = "Blues",
+    domain = c(0, 1) 
+  ) %>%
+  opt_stylize(style = 6, color = "red") %>%
+  tab_options(row_group.background.color = "#E6E6E6")
+```
+
+
+### Plot relative width increase stratified by measure and method
+
+Note that observation "*A20-93 \|\| Abb. 12 \|\| HbA1c*" is removed
+
+```{r}
+#| label: fig-rel-width-stratified2
+#| fig-width: 16
+#| fig-height: 20
+#| fig-dpi: 300
+
+data_plot <- data_clean %>% 
+  filter(method != "Fixed effect") %>% 
+  filter(MA != "A20-93 || Abb. 12 || HbA1c")
+
+
+ggplot(data_plot, aes(x = Q, y = rel_width_increase, color = method)) +
+    geom_jitter(alpha = 0.4, size = 1.5, width = 0.1) + 
+    # geom_smooth(formula = y ~ x, method = "loess", se = FALSE, linewidth = 1.2) +
+
+    facet_grid(method ~ measure, scales = "free") + 
+    
+    scale_x_sqrt(name = "Cochran's Q (sqrt scale)") +
+    scale_y_continuous(
+      trans = "log1p",
+      labels = scales::percent,
+      name = "Rel. Width Increase (log1p Scale)") +
+    
+   #  line at 0%
+      geom_hline(
+    yintercept = 0,
+    color = "blue",
+    linewidth = 0.8,
+    linetype = "dashed"
+  ) +
+  
+    theme_bw(base_size = 25) +
+    theme(
+      legend.position = "none",
+      strip.text = element_text(size = 10, face = "bold"),
+      panel.spacing = unit(0.7, "lines"),
+      panel.grid.minor = element_blank()
+    )
+```
+
+
+For singular inspection, here is an interctive plot:
+
+```{r}
+#| label: fig-rel-width-stratified2-plotly
+
+
+p <- ggplot(data_plot, aes(
+    x = Q, 
+    y = rel_width_increase, 
+    color = method,
+    # w 'text' define what shows up in the box
+    text = paste("MA ID:", MA, 
+                 "<br>Cochran's Q:", round(Q, 2), 
+                 "<br>Increase:", scales::percent(rel_width_increase))
+  )) +
+  geom_jitter(alpha = 0.5, size = 1.2, width = 0.1) + 
+  facet_wrap(~ method + measure, scales = "free") + 
+  scale_x_sqrt(name = "Cochran's Q (sqrt scale)") +
+    scale_y_continuous(
+      trans = "log1p",
+      labels = scales::percent,
+      name = "Rel. Width Increase (log1p Scale)") +
+  theme_bw() +
+  theme(legend.position = "none")
+
+
+# 'tooltip = "text"' tells plotly to use the text we defined above
+ggplotly(p, tooltip = "text", height = 1200, width = 1000)
+```
+
+
+
+# Other validations
 
 ## Confidence interval skewness
 
 The skewness of each confidence interval is computed as:
 
 Of course Fixed Effect mehods cannot be skewed so we don't report them. $$
-\text{Skewness} = \frac{\text{upper} + \text{lower} - 2 \times \text{estimate}}{\text{upper} - \text{lower}}
-$$
+\text{Skewness} = \frac{\text{upper} + \text{lower} - 2 \times \text{estimate}}{\text{upper} - \text{lower}}$$
 
 ```{r}
 #| label: tbl-skewness
 
-ci_skewness <- extract_ma_metric(cis, "ci_skewness")
 
-ci_skewness <- ci_skewness %>% filter (!(method %in% c("Fixed effect", "Hartung & Knapp")))
+ci_skewness <- df_mas %>% filter (!(method %in% c("Fixed effect", "Hartung & Knapp")))
 table_skewness <- compute_summary (ci_skewness, stats = "ci_skewness")
 
 
@@ -894,7 +1687,8 @@ render_gt (table_skewness, title = "Confidence Interval skewness")
 
 ```
 
-{{< pagebreak >}}
+
+
 
 ## Coherence of skewness signs (β, γ, AUCC ratio)
 
@@ -917,20 +1711,14 @@ $$.
 #| label: sign-agreement-preparation
 
 # Build sign agreement dataset
-sign_agreement <- do.call(rbind, lapply(cis, function(x) {
-  df <- x$ci 
-  df <- subset(df, !is.na(ci_skewness) & !method %in% c("Fixed effect", "Hartung & Knapp", "Bayesmeta"))
-  data.frame(
-    MA = x$ma_id,
-    method = df$method,
-    data_skewness = x$data_skewness,
-    ci_skewness = df$ci_skewness,
-    aucc_ratio = df$aucc_ratio
-  )
-})) %>%
+sign_agreement <- df_mas %>%
+  filter(
+    !is.na(ci_skewness),
+    !method %in% c("Fixed effect", "Hartung & Knapp", "Bayesmeta")
+  ) %>%
   mutate(
     same_sign_beta_gamma = sign(data_skewness) == sign(ci_skewness),
-    same_sign_beta_aucc = sign(ci_skewness) == sign(aucc_ratio),
+    same_sign_beta_aucc  = sign(ci_skewness) == sign(aucc_ratio),
     same_sign_gamma_aucc = sign(data_skewness) == sign(aucc_ratio)
   )
 
@@ -990,7 +1778,7 @@ sign_summary %>%
   ) %>%
   fmt_number(
     columns = c(starts_with("corr"), kappa_beta_gamma),
-    decimals = 3
+    decimals = 2
   ) %>%
   fmt_number(
     columns = c(n_MA, starts_with("agree")),
@@ -1059,15 +1847,13 @@ sign_long %>%
     y = "Proportion of Agreement",
     fill = "Comparison"
   ) +
-  theme_minimal() +
+  theme_bw() +
   theme(
     axis.text.x = element_text(angle = 45, hjust = 1),
     plot.title = element_text(face = "bold", size = 12),
     legend.position = "bottom"
   )
 ```
-
-{{< pagebreak >}}
 
 ## Is the study estimate contained in the Meta-Analytic CI
 
@@ -1083,23 +1869,24 @@ How many **individual** study estimates fall outside their respective meta-analy
 #| label: included-preparation
 
 
-
-# Merge
-merged_df <- ma_ci_df %>%
-  left_join(input_df, by = "MA", relationship = "many-to-many")
-
-
-merged_df <- merged_df %>%
+# Join Results with Inputs
+included_data <- df_mas %>%
+  left_join(df_inputs, by = "MA") %>%
   mutate(
-    outside_CI = input_estimate < lower_MA | input_estimate > upper_MA
+    # Check Study 1
+    s1_outside = est_1 < lower | est_1 > upper,
+    # Check Study 2
+    s2_outside = est_2 < lower | est_2 > upper
   )
 
 # Calculate summary statistics
-included_summary <- merged_df %>%
+included_summary <- included_data %>%
   group_by(method) %>%
   summarise(
-    n_estimates_total = n(),
-    n_estimates_outside = sum(outside_CI, na.rm = TRUE),
+    # Total estimates = 2 per MA
+    n_estimates_total = n() * 2,
+    # Count how many are outside
+    n_estimates_outside = sum(s1_outside, na.rm = TRUE) + sum(s2_outside, na.rm = TRUE),
     prop_outside = n_estimates_outside / n_estimates_total,
     .groups = "drop"
   )
@@ -1147,8 +1934,6 @@ included_summary %>%
 
 **NOTE** it can be proven that Edgington will always contain the singular study estimates in his 95% CI, so this result was predictable.
 
-{{< pagebreak >}}
-
 ## CIs informativness
 
 For a given meta-analysis $x$, let the 95% confidence interval for study $i$ be denoted by $[L_{i,x}, U_{i,x}]$, where $L_{i,x}$ is the lower bound and $U_{i,x}$ is the upper bound. Specifically for the two-study case, we have $L_{1,x}, U_{1,x}$ for study 1 and $L_{2,x}, U_{2,x}$ for study 2.
@@ -1168,30 +1953,18 @@ As a contrary, an interval is defined as *non-informative* if it fails to meet t
 ```{r}
 #| label: informativness-preparation
 
-
-bounds_df <- input_df %>% 
-  group_by(MA) %>% 
-  summarise(
-    studies_lower = min(input_lower),
-    studies_upper = max(input_upper),
-    .groups = "drop"
-  )
-
-# Merge
-merged_df <- left_join(ma_ci_df, bounds_df, by = "MA")
-
-merged_df <- merged_df %>% 
+info_data <- df_mas %>%
+  left_join(df_inputs, by = "MA") %>%
   mutate(
-    # MA CI is informative if it is NARROWER than the studies range
-    informative = (lower_MA > studies_lower & upper_MA < studies_upper)
+    informative = (lower > min_study_lower & upper < max_study_upper)
   )
 
-summ <- merged_df %>% 
-  group_by(method) %>% 
+summ <- info_data %>%
+  group_by(method) %>%
   summarise(
     total = n(),
-    n_informative = sum(informative),
-    prop_informative = mean(informative),
+    n_informative = sum(informative, na.rm = TRUE),
+    prop_informative = mean(informative, na.rm = TRUE),
     .groups = "drop"
   )
 ```
@@ -1225,835 +1998,9 @@ summ %>%
   opt_stylize(style = 6, color = "blue")
 ```
 
-
-{{< pagebreak >}}
-
-
-
-## Heterogeneity summary
-
-**Cochran's** $Q$ $$Q = \sum_{i=1}^{k} w_i (\hat{\theta}_i - \hat{\theta}_{FE})^2$$where $k$ is the number of studies (here $k=2$), and $w_i = 1/\sigma_i^2$. Under the null hypothesis of homogeneity, $Q$ follows a $\chi^2$ distribution with $k-1$ degrees of freedom.
-
-**Inconsistency Index** ($I^2$) Describes the percentage of variation across studies that is due to heterogeneity rather than chance.$$I^2 = \max\left(0, \frac{Q - (k - 1)}{Q}\right) \times 100\%$$
-
-**Between-study Variance** ($\tau^2$) estimated using REML
-
-**Note** 
-
-Under homogeneity ($\tau^2 = 0$), we have $\theta_i \sim N(\mu, v_i)$. Then $\theta_1 - \theta_2 \sim N(0, v_1 + v_2)$, so $Q = \frac{(\theta_1 - \theta_2)^2}{v_1 + v_2} \sim \chi^2_1$.
-And under $H_0$ we have ${Q \sim \chi^2_1}$.
-Critical value at $\alpha = 0.05$: $3.84$.
-So you reject iff $|\theta_1 - \theta_2| > \sqrt{3.84 (v_1 + v_2)}$.
-
-
-
-```{r}
-#| label: heterogeneity-preparation
-
-
-hetero_df <- bind_rows(
-  lapply(cis, function(x) {
-    x$heterogeneity %>%  
-      as.data.frame() %>% 
-      mutate (
-        MA = x$ma_id,
-        Tau2 = Tau^2
-      ) }
-  )
-) 
-
-summary_hetero <- hetero_df %>% 
-  summarise(
-    total = n(),
-    avg_Q = mean(Q),
-    avg_pQ = mean(p_Q),
-    avg_I2 = mean(I2),
-    avg_tau = mean(Tau2),
-    .groups = "drop"
-  )
-
-summary_hetero %>%
-  gt() %>%
-  cols_label(
-    total = "Total MA",
-    avg_Q = "Average Q value",
-    avg_pQ = "Average value of  p value of Q",
-    avg_I2 = "Average I2 value",
-    avg_tau = "Average tau value"
-  ) %>%
-  fmt_number(
-    columns = c(avg_Q,avg_pQ,  avg_I2, avg_tau),
-    decimals = 2
-  ) %>%
-  tab_style(
-    style = cell_text(weight = "bold"),
-    locations = cells_column_labels()
-  ) %>%
-  opt_stylize(style = 6, color = "blue")
-```
-
-## Stratified Q statistics
-
-```{r}
-#| label: heterogeneity-preparation-stratified
-
-# Create a long dataframe with one row per Method per MA
-q_all_methods <- bind_rows(lapply(cis, function(x) {
-  
-  # 1. Extract heterogeneity (Common to all methods in this MA)
-  Q_val <- x$heterogeneity$Q             # -->   would it be better to use I2???
-  
-  # 2. Extract Method-specific metrics
-  methods <- names(x$width)
-  
-  data.frame(
-    MA = x$ma_id,
-    measure = x$measure,
-    Q = Q_val,
-    method = methods,
-    width = as.numeric(x$width),
-    p_value = as.numeric(x$p_0), # P-value for H0: theta=0
-    stringsAsFactors = FALSE
-  )
-}))
-
-```
-
-### Q stratified by measure
-
-Full graph on the above, with a zoomed-in view below due to the outliers that ruin the visualisation. Data are reported on the square root scale.
-
-```{r}
-#| label: fig-heterogeneity-stratified
-#| fig-height: 6
-
-# We take unique MA rows to avoid counting Q multiple times
-q_unique <- q_all_methods %>% 
-  distinct(MA, .keep_all = TRUE)
-
-
-#use the ggforce package --> facet_zoom allow us to zoom in
-
-
-ggplot(q_unique, aes(x = Q, y = measure, color = measure)) +
-  geom_boxplot(outlier.shape = NA, width = 0.5, alpha = 0.5) + 
-  geom_jitter(height = 0.1, alpha = 0.5, size = 1) +
-  
-  scale_x_sqrt(
-    breaks = c(0, 10, 50, 100, 200, 500), 
-    name = "Cochran's Q (Scale sqrt)"
-  ) +
-  
-  # Note: xlim in facet_zoom must use original Q values 
-  facet_zoom(xlim = c(0, 20), zoom.size = 1) + 
-  
-  theme_bw() +
-  theme(
-    legend.position = "none" 
-  )
-
-```
-
-**NOTE**, there is a huge outlier, with id "*A20-93 \|\| Abb. 12 \|\| HbA1c*". It has a Q-statistics = 570.95.
-
-### Summary table
-
-```{r}
-#| label: tbl-Q-vs-width-pvals
-
-q_all_methods %>%
-  group_by(method) %>%
-  summarise(
-    Cor_Q_Width = cor(Q, width, method = "spearman", use = "complete.obs"),
-    Cor_Q_Width_p = cor(Q, width, method = "pearson", use = "complete.obs"),
-    Cor_Q_Pval  = cor(Q, p_value, method = "spearman", use = "complete.obs"),
-    Cor_Q_Pval_p  = cor(Q, p_value, method = "pearson", use = "complete.obs"),
-    .groups = "drop"
-  ) %>%
-  arrange(desc(Cor_Q_Width)) %>%
-  gt() %>%
-  tab_header(
-    title = md("**Correlation with Heterogeneity**"),
-  ) %>%
-  cols_label(
-    method = "Method",
-    Cor_Q_Width = "Corr(Q, Width) Spearman",
-    Cor_Q_Width_p = "Corr(Q, Width) Pearson", 
-    Cor_Q_Pval = "Corr(Q, P-val) Spearman", 
-    Cor_Q_Pval_p  = "Corr(Q, P-val) Pearson"
-  ) %>%
-  fmt_number(columns = starts_with("Cor"), decimals = 3) %>%
-  data_color(
-    columns = starts_with("Cor"),
-    method = "numeric",
-    palette = "RdBu", # Red-Blue diverging palette
-    domain = c(-1, 1)
-  ) %>%
-  opt_stylize(style = 6, color = "blue")
-```
-The positive correlation shows that **Edgington "adapts":** When $Q$ increases (meaning studies are moving apart), the Edgington confidence interval widens to account for that conflict.
-
-The large gap between Pearson and Spearman suggests that the relationship between heterogeneity and Edgington width is *not linear,* but it is monotonic. (e.g. Edgington doesn't widen in a straight line as $Q$ grows; but maybe stays stable for a while and then "reacts" more strongly once Q reaches a certain threshold, *which I suppose should be Q>1*).
-
-
-The correlations between $Q$ and P-values for Edgington methods are essentially zero. This suggests that while Edgington widens its uncertainty (Width) when studies disagree, it doesn't necessarily lose its ability to find an effect (P-value) just because the studies are heterogeneous.
-In contrast,  FE: has a negative Spearman correlation. This suggests that as studies move apart ($Q$ increases), the p-value actually tends to get "smaller" (more significant). 
-
-Thus, in this context, Edgington appears more stable. 
-
-
-
-
-## Relative Width Increase
-
-$$
-\frac{\text{Width}_{\text{Method}} - \text{Width}_{\text{FE}}}{\text{Width}_{\text{FE}}} 
-$$
-
-Basically, we are measuring **how much the interval is increasing with respect to FE.**
-
-We plot this increase against Cochran's $Q$ to show how methods respond to heterogeneity. A positive value indicates a penalty for heterogeneity: as the study estimates diverge, the method produces a wider (more conservative) interval.
-
-On the right, all methods are plotted together, on the right, to better inspection, the HK method is removed.
-
-**This plot uses the LOESS smoother**. This can be misleading, it is just to detect a general trend, next plots will inspect deeper.
-
-**IMPORTANT** I often use *log1p scale*, i.e. $log1p(x)=log(1+x)$
-
-```{r}
-#| label: q-vs-rel-width-preparation
-
-fe_widths <- q_all_methods %>%
-  filter(method == "Fixed effect") %>%
-  select(MA, width_fe = width)
-
-q_relative <- q_all_methods %>%
-  left_join(fe_widths, by = "MA") %>%
-  mutate(
-    rel_width_increase = (width - width_fe) / width_fe
-  )
-```
-
-```{r}
-#| label: fig-q-vs-rel-width
-#| fig-height: 15
-#| fig-width: 20
-
-#add the panels
-data_all <- q_relative %>% 
-  mutate(panel = "All Methods (Including HK)")
-
-data_no_hk <- q_relative %>% 
-  filter(method != "Hartung & Knapp") %>% 
-  mutate(panel = "Excluding Hartung & Knapp")
-
-#same as above
-combined_data <- bind_rows(data_all, data_no_hk) %>%
-  mutate(panel = factor(panel, levels = c("All Methods (Including HK)", "Excluding Hartung & Knapp")))
-
-
-ggplot(combined_data, aes(x = Q, y = rel_width_increase, color = method)) +
-  geom_smooth(formula = y ~ x, method = "loess", se = FALSE, linewidth = 1.2) + 
-  
-  facet_wrap(~panel, scales = "free_y") +
-  
-  scale_x_sqrt(
-    breaks = c(0, 10, 50, 100, 200, 400),
-    name = "Cochran's Q (sqrt scale)"
-  )  + 
-  scale_y_continuous(trans = "log1p", labels = scales::percent, 
-      name = "Rel. Width Increase (log1p Scale)")+
-  theme_bw() +
-  theme(
-    strip.background = element_rect(fill = "lightblue"),
-    strip.text = element_text(face = "bold", size = 30),
-    axis.title.x = element_text(size = 25), 
-    axis.title.y = element_text(size = 25), 
-    axis.text.x  = element_text(size = 20), 
-    axis.text.y  = element_text(size = 20),     
-    legend.position = "bottom",
-    legend.title = element_text(size = 25), 
-    legend.text  = element_text(size = 25)  
-  )
-```
-
-```{r}
-#| label: tbl-relative-width-summary
-
-
-summary_tab <- q_relative %>%
- filter (method != "Fixed effect") %>% 
-  group_by(method) %>%
-  summarise(
-    Mean_Increase = mean(rel_width_increase, na.rm = TRUE),
-    Median_Increase = median(rel_width_increase, na.rm = TRUE),
-    cor_spear = cor(Q, rel_width_increase, method = "spearman"),
-    cor_pear = cor(Q, rel_width_increase, method = "pearson"),
-    .groups = "drop"
-  ) %>%
-  arrange(desc(Mean_Increase))
-
-summary_tab %>%
-  gt() %>%
-  tab_header(
-    title = md("**Performance vs Fixed Effect**")
-  ) %>%
-  cols_label(
-    method = "Method",
-    Mean_Increase = "Mean % Increase",
-    Median_Increase = "Median % Increase",
-    cor_spear = "Corr(Q, Increase)[Spearman]", 
-    cor_pear = "Corr(Q, Increase)[Pearson]"
-  ) %>%
-  fmt_percent(
-    columns = c(Mean_Increase, Median_Increase),
-    decimals = 1
-  ) %>%
-  fmt_number(
-    columns = c(cor_spear, cor_pear),
-    decimals = 3
-  ) %>%
-  data_color(
-    columns = Mean_Increase,
-    method = "numeric",
-    palette = "Reds" 
-  ) %>%
-  data_color(
-    columns = c(cor_spear, cor_pear),
-    method = "numeric",
-    palette = "Blues",
-    domain = c(0, 1) 
-  ) %>%
-  opt_stylize(style = 6, color = "blue")
-```
-
-Edgington with a Mean % Increase of 39.7% and a Median of 11.0%, is highly sensitive to study-level conflict.
-On the other hand, the weighted with $1/SE^2$ shows a near perfect Spearman correlation, but the magnitude of the actual penalty is smaller  (Mean = 15.0%) The Median increase = 0.0% indicated that it behaves like FE in at least half of all cases. 
-
-
-**Note**:
-Cochran’s $Q$ is fundamentally an inverse-variance weighted statistic ($w_i = 1/SE^2$). Because weighted Edgington uses this exact same weighting scheme, they are strongly correlated. 
-
----
-
-Remember @tbl-pvals-differences-inspection ? Now we use again wheter the signs of the individual studies agree or not. This shows clearly that **when studies have different signs, the width will tend to increase wrt FE.**
-
-```{r}
-#| label: fig-rel-width-conflict
-
-conflict_width_data <- q_relative %>%
-  filter(method %in% c("Edgington", "Edgington (1/SE)", "Edgington (1/SE^2)")) %>%
-  left_join(
-    input_df %>%
-      group_by(MA) %>%
-      summarise(
-        opposing_directions = (input_estimate[1] * input_estimate[2] < 0),
-        .groups = "drop"
-      ),
-    by = "MA"
-  ) %>%
-  mutate(
-    Alignment = ifelse(opposing_directions, "Opposite Sign", "Same Sign"),
-    method = factor(method, levels = c("Edgington", "Edgington (1/SE)", "Edgington (1/SE^2)"))
-  )
-
-ggplot(conflict_width_data, aes(x = method, y = rel_width_increase, fill = Alignment)) +
-  geom_boxplot(alpha = 0.8, outlier.size = 1, outlier.alpha = 0.4) +
-  scale_fill_manual(values = c("Same Sign" = "#34495e", "Opposite Sign" = "#e74c3c")) +
-  scale_y_continuous(trans = "log1p", labels = scales::percent) +
-  theme_bw() +
-  labs(
-    y = "Relative Width Increase vs. Fixed Effect (log1p scale)",
-    fill = "Study Alignment",
-  ) +
-  theme(
-    legend.position = "bottom",
-    plot.title = element_text(face = "bold", size = 16),
-    axis.title = element_text(size = 12),
-    axis.text.x = element_text(size = 12),
-    legend.title = element_text(size = 12),
-    legend.text = element_text(size = 12)
-  )
-```
-
-### Relative width increase stratified by measure
-
-Now let's do the same inspection stratified by measure. 
-
-*Note*: we don't plot ROM, RD and IDR since respectively only 1,6,8 Meta-analysis use those measures and we exclude HK method.
-
-```{r}
-#| label: fig-rel_width_stratified
-#| fig-width: 16
-#| fig-height: 20
-#| fig-dpi: 300
-
-#remove ROM, RD and IDR 
-data_clean <- data_no_hk %>% 
-  filter(measure != "ROM" & measure != "RD" & measure != "IDR")
-
-ggplot(data_clean, aes(x = Q, y = rel_width_increase, color = method)) +
-    #geom_smooth(formula = y ~ x, method = "loess", se = FALSE, linewidth = 1.2) +
-    geom_point() +
-    facet_wrap(~ measure, scales = "free") +
-    scale_x_sqrt(name = "Cochran's Q (sqrt scale)") +
-    scale_y_continuous(
-      trans = "log1p",
-      labels = scales::percent,
-      name = "Rel. Width Increase (log1p Scale)")+
-    theme_bw() +
-    theme(
-    strip.background = element_rect(fill = "lightblue"),
-    strip.text = element_text(face = "bold", size = 23),
-    axis.title.x = element_text(size = 17), 
-    axis.title.y = element_text(size = 17), 
-    axis.text.x  = element_text(size = 12), 
-    axis.text.y  = element_text(size = 12),     
-    legend.position = "bottom",
-    legend.title = element_text(size = 17), 
-    legend.text  = element_text(size = 17) 
-    )
-```
-
-```{r}
-#| label: tbl-rel_width_stratified
-
-summary_tab_strat <- q_relative %>%
-  filter(method != "Fixed effect") %>%
-  group_by(measure) %>%
-  mutate(n_ma = n_distinct(MA)) %>% 
-  group_by(measure, method, n_ma) %>%
-  summarise(
-    Mean_Increase = mean(rel_width_increase),
-    Median_Increase = median(rel_width_increase),
-    cor_spear = cor(Q, rel_width_increase, method = "spearman"),
-    cor_pear = cor(Q, rel_width_increase, method = "pearson"),
-    .groups = "drop"
-  ) %>%
-  mutate(measure = paste0(measure, " (N = ", n_ma, ")"))  %>%
-  arrange(measure, desc(Mean_Increase))
-
-summary_tab_strat %>%
-  select (-n_ma) %>% 
-  gt(groupname_col = "measure") %>%
-  tab_header(
-    title = md("**Sensitivity to Heterogeneity by Measure**")
-  ) %>%
-  cols_label(
-    method = "Method",
-    Mean_Increase = "Mean % Increase",
-    Median_Increase = "Median % Increase",
-    cor_spear = "Corr(Q, Incr) [Spearman]", 
-    cor_pear = "Corr(Q, Incr) [Pearson]"
-  ) %>%
-  fmt_percent(
-    columns = c(Mean_Increase, Median_Increase),
-    decimals = 1
-  ) %>%
-  fmt_number(
-    columns = c(cor_spear, cor_pear),
-    decimals = 3
-  ) %>%
-  data_color(
-    columns = Mean_Increase,
-    method = "numeric",
-    palette = "Reds" 
-  ) %>%
-  data_color(
-    columns = c(cor_spear, cor_pear),
-    method = "numeric",
-    palette = "Blues",
-    domain = c(0, 1) 
-  ) %>%
-  opt_stylize(style = 6, color = "blue") %>%
-  tab_options(row_group.background.color = "#E6E6E6")
-```
-
-
-
-### Relative width increase stratified by measure and method
-
-Now stratify by measure and method.
-```{r}
-#| label: tbl-rel-width-stratified-summary
-
-
-summary_skewness <- q_relative %>%
-  filter(method != "Fixed effect") %>%
-  group_by(measure) %>%
-  mutate(n_ma = n_distinct(MA)) %>% 
-  group_by(measure, method, n_ma) %>%
-  summarise(
-    Mean_Increase = mean(rel_width_increase),
-    Median_Increase = median(rel_width_increase),
-    cor_spear = cor(Q, rel_width_increase, method = "spearman"),
-    cor_pear = cor(Q, rel_width_increase, method = "pearson"),
-    .groups = "drop"
-  ) 
-
-q_relative_nofe <- q_relative  %>%  filter(method != "Fixed effect")
-
-Rel_width_increase_summary <- compute_summary(
-  q_relative, 
-  stats = "rel_width_increase", 
-  grouping = c("measure", "method"), 
-  count_id = "MA"
-)
-
-
-Rel_width_increase_summary %>% 
-  gt(groupname_col = "measure") %>%
-  cols_label(
-    method = "Method",
-    mean = "Mean % Increase",
-    median = "Median % Increase",
-    sd = "SD % Increase",
-    q25 = "25th % Increase",
-    q75 = "75th % Increase",
-    max = "Max % Increase",
-    min = "Min % Increase"
-  ) %>%
-  fmt_percent(
-    columns = c(mean, median, sd, q25, q75, max, min),
-    decimals = 1
-  ) %>%  opt_stylize(style = 6, color = "blue") %>%
-  tab_options(row_group.background.color = "#E6E6E6")
-
-
-
-```
-
-
-
-### Plot relative width increase stratified by measure and method
-
-Note that observation "*A20-93 \|\| Abb. 12 \|\| HbA1c*" is removed
-
-```{r}
-#| label: fig-rel-width-stratified2
-#| fig-width: 16
-#| fig-height: 20
-#| fig-dpi: 300
-
-data_plot <- data_clean %>% 
-  filter(method != "Fixed effect") %>% 
-  filter(MA != "A20-93 || Abb. 12 || HbA1c")
-
-
-ggplot(data_plot, aes(x = Q, y = rel_width_increase, color = method)) +
-    geom_jitter(alpha = 0.4, size = 1.5, width = 0.1) + 
-    # geom_smooth(formula = y ~ x, method = "loess", se = FALSE, linewidth = 1.2) +
-
-    facet_grid(method ~ measure, scales = "free") + 
-    
-    scale_x_sqrt(name = "Cochran's Q (sqrt scale)") +
-    scale_y_continuous(
-      trans = "log1p",
-      labels = scales::percent,
-      name = "Rel. Width Increase (log1p Scale)") +
-    
-   #  line at 0%
-      geom_hline(
-    yintercept = 0,
-    color = "blue",
-    linewidth = 0.8,
-    linetype = "dashed"
-  ) +
-  
-    theme_bw(base_size = 25) +
-    theme(
-      legend.position = "none",
-      strip.text = element_text(size = 10, face = "bold"),
-      panel.spacing = unit(0.7, "lines"),
-      panel.grid.minor = element_blank()
-    )
-```
-
-```{r}
-#| label: fig-rel-width-stratified2-plotly
-
-
-p <- ggplot(data_plot, aes(
-    x = Q, 
-    y = rel_width_increase, 
-    color = method,
-    # w 'text' define what shows up in the box
-    text = paste("MA ID:", MA, 
-                 "<br>Cochran's Q:", round(Q, 2), 
-                 "<br>Increase:", scales::percent(rel_width_increase))
-  )) +
-  geom_jitter(alpha = 0.5, size = 1.2, width = 0.1) + 
-  facet_wrap(~ method + measure, scales = "free") + 
-  scale_x_sqrt(name = "Cochran's Q (sqrt scale)") +
-    scale_y_continuous(
-      trans = "log1p",
-      labels = scales::percent,
-      name = "Rel. Width Increase (log1p Scale)") +
-  theme_bw() +
-  theme(legend.position = "none")
-
-
-# 'tooltip = "text"' tells plotly to use the text we defined above
-ggplotly(p, tooltip = "text", height = 1200, width = 1000)
-```
-
-{{< pagebreak >}}
-
-## Checking Estimates
-
-Inspecting the Estimates (the point which has the highest p-value) provided by each method
-
-```{r}
-#| label: tbl-estimates
-
-estimates_df <- extract_ma_metric(cis, "estimates")
-
-table_estimates <- compute_summary(estimates_df, stats = "estimates")
-
-render_gt (table_estimates, title = "Estimates")
-```
-
-```{r}
-#| label: estimates-preparation
-
-# wide: one row per MA, one column per method
-wide_estimates <- estimates_df %>%
-  select(MA, method, estimates, measure) %>%
-  pivot_wider(names_from = method, values_from = estimates)
-
-# long comparison vs FE
-long_vs_FE <- wide_estimates %>%
-  pivot_longer(
-    cols = -c(MA, `Fixed effect`, measure), #keep FE as column so that I can compare
-    names_to = "method",
-    values_to = "method_est"
-  ) %>%
-  mutate(
-    fe = `Fixed effect`,
-    delta = method_est - fe,
-    method_bigger_FE = method_est > `Fixed effect`,
-    method_smaller_FE = method_est < `Fixed effect`,
-    equal = method_est == `Fixed effect`
-  ) %>% 
-  select (-`Fixed effect`)
-```
-
-### Agreement of sign of Estimates
-
-Comparison of the **direction** of each method’s estimate with the **Fixed Effect** one.
-
-For each method, we summarise:
-
-The proportion of meta-analyses for which at least one of the FE or method estimates has no well-defined sign (\|estimate\| ≤ tol).
-
-The proportion of meta-analyses where the method has the same sign as FE and the proportion with a flipped sign relative to FE, **among all meta-analyses**
-
-```{r}
-#| label: tbl-agreement-estimates
-
-
-
-# Sign treshold ->  If a value is smaller than this, it is not considered as a sign. VALUE CAN BE CHANGED 
-tol <- 1e-6
-
-#Better sign function w tolerance
-sign3 <- function(x, tol) {
-       ifelse(abs(x) <= tol, 0L, ifelse(x > 0, 1L, -1L)) 
-}
-
-long_vs_FE <- long_vs_FE %>%
-  mutate(
-    sign_fe = sign3(fe, tol),
-    sign_method = sign3(method_est, tol),
-    sign_defined = (sign_fe != 0L) & (sign_method != 0L), #both different from 0
-    sign_agree = ifelse(sign_defined, sign_fe == sign_method, NA), # same sign, if sign not defined put NA
-    sign_flip = ifelse(sign_defined, sign_fe != sign_method, NA)
-  )
-
-
-
-
-summ_long_vs_FE <- long_vs_FE %>%
-  group_by(method) %>%
-  summarise(
-    n_total = n(),
-    prop_sign_non.defined = mean(!sign_defined, na.rm = TRUE) *100,
-    prop_same_sign = sum(sign_agree, na.rm = TRUE) / n_total *100,
-    prop_flip_sign = sum(sign_flip, na.rm = TRUE) / n_total * 100,
-    .groups = "drop"
-  )
-
-
-summ_long_vs_FE %>%
-  gt() %>%
-  tab_header(
-    title = md("**Agreement of sign with Fixed Effect**")
-  ) %>%
-  cols_label(
-    method = "Method",
-    n_total = "N studies",
-    prop_sign_non.defined = "Sign not defined (%)",
-    prop_same_sign = "Same sign as FE (%)",
-    prop_flip_sign = "Sign flip vs FE (%)",
-  ) %>%
-  fmt_number(
-    columns = c(prop_sign_non.defined, prop_same_sign, prop_flip_sign),
-    decimals = 2
-  ) %>%
-  fmt_number(
-    columns = c(n_total),
-    decimals = 0,
-    use_seps = TRUE
-  ) %>%
-  cols_align(
-    align = "center",
-    columns = -method
-  ) %>%
-  tab_style(
-    style = cell_text(weight = "bold"),
-    locations = cells_column_labels()
-  ) %>%
-  opt_stylize(style = 6, color = "blue")
-
-```
-
-### Shrinkage ratio
-
-$SR = \frac {\hat{\mu}_{\text{method}}}  {\hat{\mu}_{\text{FE}}}$
-
-Negative values of SR indicate a **sign flip** relative to FE, while positive values indicate agreement in direction. Among positive ratios, values between 0 and 1 correspond to **shrinkage toward zero** relative to FE, and values larger than 1 indicate **more extreme estimates** than FE. Finally, value equal to 1 (using the tolerance) indicate that the two methods provide the same estimate.
-
-We **exclude** meta analysis where $|\hat{\mu}_{\text{FE}} | < tol$ (i.e., where the Fixed Effect estimate is effectively zero), as the ratio is undefined in these cases.
-
-For each method, we report how often estimates flip sign, how often they are shrunken toward zero, how often they are more extreme than FE.
-
-```{r}
-#| label: tbl-SR-summary1
-# ---- SHRINKAGE RATIO SR = method / FE ----
-
-#use a small tolerance to avoid division by zero..
-tol <- 1e-6
-
-
-ratio_df <- long_vs_FE %>%
-  mutate(
-    SR = ifelse(abs(fe) < tol, NA, method_est / fe))%>%
-  filter(is.finite(SR)) %>%  #just keep defined ratios
-   mutate(
-    SR_class = case_when(
-      abs(SR - 1) < tol ~ "Equal (SR=1)",
-      SR < 0 ~ "Flip sign (SR<0)",
-      SR >= 0 & SR < 1 ~ "Shrink toward 0 (0<=SR<1)",
-      SR > 1 ~ "More extreme (SR>1)"
-      )
-  ) 
-
-
-ratio_summary <- ratio_df %>%
-  group_by(method) %>%
-  summarise(
-    n = n(),
-    prop_flip = mean(SR_class == "Flip sign (SR<0)" ) *100,
-    prop_shrink = mean(SR_class == "Shrink toward 0 (0<=SR<1)"  ) *100,
-    prop_more_extreme = mean(SR_class == "More extreme (SR>1)" ) * 100,
-    prop_exactly_same = mean(SR_class == "Equal (SR=1)" ) * 100,
-    .groups = "drop"
-  )
-
-ratio_summary %>% 
-  gt() %>%
-  tab_header(
-    title = md("**Shrinkage ratio summary**"),
-  ) %>%
-  cols_label(
-    method = "Method",
-    n = "N MA",
-    prop_flip = "Flipped signs (%)",
-    prop_shrink = "Shrinked estimates(%)",
-    prop_more_extreme = "More extreme estimates (%)",
-    prop_exactly_same = "Same estimates (%)"
-    ) %>%
-  fmt_number(
-    columns = c(prop_flip, prop_shrink, prop_more_extreme, prop_exactly_same),
-    decimals = 2
-  ) %>% 
-  cols_align(
-    align = "center",
-    columns = -method
-  ) %>%
-  tab_style(
-    style = cell_text(weight = "bold"),
-    locations = cells_column_labels()
-  ) %>%
-  opt_stylize(style = 6, color = "blue") 
-
-```
-**NOTE**: 
-Ratios were undefined for `r length(unique(df_estimates$identifier)) - ratio_summary$n[1]` MA, where the Fixed Effect estimate was effectively zero ($|\hat{\mu}_{FE}| < 10^{-6}$); these cases were excluded from the shrinkage summary."
-
-```{r}
-#| label: tbl-SR-summary2
-
-
-sr_global <- ratio_df %>%
-  group_by(method) %>%
-  summarise(
-    Studies = n(),
-    Mean   = mean(SR),
-    SD     = sd(SR),
-    Median = median(SR),
-    Q25    = quantile(SR, 0.25),
-    Q75    = quantile(SR, 0.75),
-    Min    = min(SR),
-    Max    = max(SR),
-    .groups = "drop"
-  )
-
-
-sr_global %>%
-  gt() %>%
-  tab_header(
-    title = md("**Distribution of Shrinkage Ratios (Method / FE)**"),
-    subtitle = "Values < 1 indicate shrinkage toward zero. Values < 0 indicate sign flip."
-  ) %>%
-  cols_label(method = "Method") %>%
-  fmt_number(
-    columns = c(Mean, SD, Median, Q25, Q75, Min, Max),
-    decimals = 3
-  ) %>%
-  cols_align(align = "center", columns = -method) %>%
-  tab_style(
-    style = cell_text(weight = "bold"),
-    locations = cells_column_labels()
-  ) %>%
-  opt_stylize(style = 6, color = "blue")
-```
-Median equal 1 is promising
-
-### Stratified Shrinkage Ratio
-
-```{r}
-#| label: tbl-SR-stratified
-
-
-sr_stratified <- compute_summary(
-  ratio_df, 
-  stats = "SR", 
-  grouping = c("measure", "method"), 
-  count_id = "MA"
-) %>% arrange(measure, method) 
-
-render_gt(
-  sr_stratified,
-  title = "Shrinkage Ratio Distribution by Effect Measure",
-  group_col = "measure", decimals = 3
-  )
-```
-
-# Lemma 4.3.1
+# Lemma 4.3.1 (Two-study case)
 
 ::: {.callout-note icon="false"}
-## Lemma 4.3.1 (Two-study case)
 
 Consider a meta-analysis with exactly two studies, with point estimates $\hat\theta_1, \hat\theta_2$ and standard errors $\sigma_1, \sigma_2 > 0$. Let the confidence level be $1-\alpha$ with $0 < \alpha < 1/4$, and define:
 
@@ -2400,3 +2347,4 @@ p <- ggplot(df_abs_diff, aes(x = p_diff_abs, y = p_combined, color = method)) +
 ggplotly(p, tooltip = "text")
 
 ```
+

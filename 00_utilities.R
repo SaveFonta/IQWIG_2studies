@@ -4,6 +4,7 @@
 library(metafor)
 library(dplyr)
 library(confMeta)
+library(gt)
 
 
 
@@ -335,41 +336,7 @@ process_escalc <- function(df, zero_handling = "only0", MH = FALSE, ...) {
 # ----- Formatting functions for graph and summaries ----
 
 
-# Split up the MAs into groups according to the number of
-# studies within them (easy to change)
-group <- function(n_studies) {
-  lvls <- c("2 studies", "3 studies", "> 3 studies")
-  group1 <- function(n) {
-    if (n == 2) {
-      lvls[1]
-    } else if (n == 3) {
-      lvls[2]
-    } else {
-      lvls[3]
-    }
-  }
-  res <- vapply(n_studies, group1, character(1L))
-  res <- factor(res, levels = lvls) #trasform in factor
-}
-
-# Add group sizes to labels (for 2 studies, everyone will have same label)
-add_group_size <- function(group_ind, strata) {
-  stopifnot(is.factor(group_ind))
-  stopifnot(is.atomic(strata))
-  stopifnot(length(group_ind) == length(strata))
-  counts <- stats::aggregate(
-    x = strata ~ group_ind,
-    FUN = function(x) length(unique(x))
-  )
-  cnt <- counts$strata
-  names(cnt) <- counts$group_ind
-  lvls <- levels(group_ind)
-  new_lvls <- paste0(lvls, " (n = ", cnt[lvls], ")")
-  levels(group_ind) <- new_lvls
-  group_ind
-}
-
-
+#In the last version I ma not using anymore, but for older versios it is necessary
 extract_ma_metric <- function(cis_list, metric) {
   
   # Extract the specific metric (width/significant/whatever)
@@ -401,8 +368,6 @@ extract_ma_metric <- function(cis_list, metric) {
 
 #utilities to compute summary statistics from an obbject processed by extract_ma_metric
 
-library(dplyr)
-library(gt)
 
 #  Summary Function
 
@@ -493,6 +458,12 @@ render_gt <- function(table, title, decimals = 2, group_col = NULL) { #usually g
     ) %>%
     opt_stylize(style = 6, color = "blue")
 }
+
+
+
+
+
+
 
 #########################################
 #       Utilities for lemma checking    #

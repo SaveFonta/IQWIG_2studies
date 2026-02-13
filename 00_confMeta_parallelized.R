@@ -307,24 +307,6 @@ confMeta.full <- function(data,
 #'
 #' @description
 #' Internal function to process a single meta-analysis. Called by \code{confMeta.full()}
-#' for each unique meta-analysis ID.
-#'
-#' @param id_col_name Character. Name of the meta-analysis ID column.
-#' @param id Character/Numeric. The specific meta-analysis ID to process.
-#' @param df Data frame containing all meta-analysis data.
-#' @param n0 Character. Name of the numeric ID column.
-#' @param est_col Character. Name of estimates column.
-#' @param se_col Character. Name of standard errors column.
-#' @param level Numeric. Confidence level.
-#' @param study Character. Name of study identifier column.
-#' @param effect.measure Character. Name of effect measure column.
-#' @param additional_info1_col Character. First additional info column (optional).
-#' @param additional_info2_col Character. Second additional info column (optional).
-#' @param sign_threshold Numeric. Value used to check if the confidence interval contains the null hypothesis (default: 0).
-#' @param ... Additional arguments passed to \code{get_ma_results()}.
-#'
-#' @return An object of class "confMeta.full" or NULL if processing fails.
-#'
 #' @keywords internal
 #' @noRd
 
@@ -804,9 +786,8 @@ get_ma_results <- function(data,
 # Internal Helper Functions
 # ==============================================================================
 
-#' Create CI DataFrame from List
-#' @keywords internal
-#' @noRd
+# Create CI DataFrame from List
+
 .create_ci_dataframe <- function(ci_list, sign_threshold = 0) {
   
   #create list of df
@@ -835,9 +816,7 @@ get_ma_results <- function(data,
 
 
 
-#' Add P-Values to CI DataFrame
-#' @keywords internal
-#' @noRd
+# Add P-Values to CI DataFrame
 .add_p_values <- function(ci_df, cms, methods_to_exclude) {
   # Extract p-values from confMeta objects
   p_0_new <- vapply(cms, function(x) x[["p_0"]][, "y"], double(1L))
@@ -863,9 +842,8 @@ get_ma_results <- function(data,
 
 
 
-#' Add P-Values to CI DataFrame
-#' @keywords internal
-#' @noRd
+# Add P-Values to CI DataFrame
+
 .add_aucc_metrics <- function(ci_df, cms) {
   aucc_df <- data.frame(
     method = names(cms),
@@ -880,9 +858,8 @@ get_ma_results <- function(data,
 
 
 
-#' Add Point Estimates and CI Skewness
-#' @keywords internal
-#' @noRd
+# Add Point Estimates and CI Skewness
+
 .add_estimates_and_skewness <- function(ci_df, cms) {
   # Extract central estimates from confMeta objects
   m_values <- vapply(cms, function(x) x$p_max[, "x"], numeric(1L))
@@ -917,9 +894,8 @@ get_ma_results <- function(data,
 
 
 
-#' Run Bayesian Meta-Analysis
-#' @keywords internal
-#' @noRd
+# Run Bayesian Meta-Analysis
+
 .run_bayesian_analysis <- function(estimates, SEs, meas, 
                                    tau_prior_scale_rr, tau_prior_scale_or,tau_prior_scale_smd, point_estimate = "median", sign_threshold = 0) {
   # Set prior based on effect measure
@@ -977,9 +953,8 @@ get_ma_results <- function(data,
 
 
 
-#' Calculate Weighted Skewness
-#' @keywords internal
-#' @noRd
+# Calculate Weighted Skewness
+
 .calculate_weighted_skewness <- function(est, se) {
   w <- 1 / se^2
   theta_bar <- sum(w * est) / sum(w)
