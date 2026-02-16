@@ -54,14 +54,14 @@ if (!requireNamespace("remotes", quietly = TRUE)) {
 
 # Load all libraries
 load_libraries(
-  "dplyr", "DT", "tidyr")
+  "dplyr", "DT", "tidyr", "purrr")
 
 
 # input data from
 path <- file.path("Output", "cis.rds")
 input <- readRDS(path)
+cis <- input$cis
 df_estimates <- input$df_estimates
-
 ```
 
 ```{r}
@@ -72,95 +72,107 @@ df_estimates <- input$df_estimates
 
 
 
-ma_info <- df_estimates %>%
-  select(no, identifier, sheet_name, effect.measure) %>%
-  arrange(no) %>%
-  distinct() %>% #fundamental, otw there are two rows each MA
+# FIRST DATAFRAME
+# Contains all stats for every Method x MA combination
+
+df_mas <- map_dfr(cis, function(x) {
+  x$ci %>%
+    as.data.frame() %>%
+    mutate(
+      MA = x$ma_id,
+      measure = x$measure,
+      # Add heterogeneity (repeated for all methods in this MA)
+      Q = x$heterogeneity$Q,
+      I2 = x$heterogeneity$I2,
+      Tau2 = x$heterogeneity$Tau^2,
+
+      data_skewness = x$data_skewness
+    )
+}) %>%
+  rename(p_val = p_0) 
+
+# 2ND
+# Contains 1 row per MA with study-level info (SEs, estimates, bounds)
+
+df_inputs <- map_dfr(cis, function(x) {
+   est <- x$inputs$estimate
+   se  <- x$inputs$SE
+   low <- x$inputs$lower
+   upp <- x$inputs$upper
+   
+   data.frame(
+     MA = x$ma_id,
+     est_1 = est[1], 
+     est_2 = est[2],
+     
+     SE_1 = se[1],   
+     SE_2 = se[2],
+
+     min_study_lower = min(low),
+     max_study_upper = max(upp),
+
+     SE_ratio = max(se) / min(se),
+     opposing_directions = (est[1] * est[2]) < 0
+   )
+})
+
+
+# This is useful for comparison w/ FE baseline
+
+df_fe <- df_mas %>%
+  filter(method == "Fixed effect") %>%
+  select(MA, width_fe = width, p_fe = p_val, est_fe = estimate)
+
+df_comparisons <- df_mas %>%
+  filter(method != "Fixed effect") %>%
+  left_join(df_fe, by = "MA") %>%
   mutate(
-    safe_id = gsub("[^A-Za-z0-9_-]", "_", identifier), #i checked and still unique id
-  Report = paste0('<a href="Output/Reports/', safe_id, '.html" target="_blank" class="btn btn-primary btn-sm" style="text-decoration:none;">View Report</a>')
+    rel_width_increase = (width - width_fe) / width_fe,
+    p_diff = p_val - p_fe,
+    shrinkage_ratio = ifelse(abs(est_fe) < 1e-6, NA, estimate / est_fe),
+    sign_flip = sign(estimate) != sign(est_fe)
   )
 
-# GOAL: add results of the methods to each MA
-cis <- input$cis
-cis_list <- lapply(cis, function(x) x[["ci"]])
-cis_long <- bind_rows(cis_list, .id = "identifier")
 
-# Wide with estimate
-df_estimates_wide <- cis_long %>%
-  select(identifier, method, estimate) %>%
-  pivot_wider(
-    names_from = method, 
-    values_from = estimate,
-    names_prefix = "est_"
-  )
 
-# Wide with significant
-df_significant_wide <- cis_long %>%
-  select(identifier, method, p_0) %>%
-  pivot_wider(
-    names_from = method, 
-    values_from = p_0,
-    names_prefix = "p0_"
-  )
 
-# containing all the singular studies
-df_studies <- df_estimates %>% 
-  group_by(identifier) %>% 
+
+
+df_ranges <- df_mas %>%
+  group_by(MA) %>%
   summarise(
-    est1 = logEst[1],
-    est2 = logEst[2],
-    SE1  = selogEst[1],
-    SE2  = selogEst[2],
+    measure = measure[1],
+    Q = Q[1],
 
-    opposing_directions = est1 * est2 < 0,   # opp signs
-    abs_diff = abs(est1 - est2),
-    SE_ratio = max(c(SE1, SE2)) / min(c(SE1, SE2)),
+    p_range = max(p_val) - min(p_val),
+    est_range = abs(max(estimate) - min(estimate)),
 
-    .groups = "drop"
+    p_Edgington = p_val[method == "Edgington"][1]
+  )
+
+#just rel width increase for Edg
+df_width_edg <- df_comparisons %>%
+  filter(method == "Edgington") %>%
+  select(MA, rel_width_increase)
+
+# merge
+final_table <- df_inputs %>%
+  left_join(df_ranges, by = "MA") %>%
+  left_join(df_width_edg, by = "MA") %>%
+  mutate(
+    safe_id = gsub("[^A-Za-z0-9_-]", "_", MA),
+    Report = paste0('<a href="Output/Reports/', safe_id, '.html" target="_blank" class="btn btn-primary btn-sm" style="text-decoration:none;">View Report</a>')
   )
 
 
-#now let's also add the significance of Q
-hetero_list <- lapply(cis, function(x) x[["heterogeneity"]])
-hetero_df <- bind_rows(hetero_list, .id = "identifier") %>% 
-  select(identifier, Q, I2)
 
 
-# Merge (I use left join here, can also use merge)
-ma_info <- ma_info %>%
-  left_join(df_estimates_wide, by = "identifier") %>%
-  left_join(df_significant_wide, by = "identifier") %>% 
-  left_join(hetero_df, by = "identifier") %>% 
-  left_join(df_studies, by = "identifier")
-
-
-#convert in factor what needed
-ma_info <- ma_info %>% 
+# convert in factor what needed
+final_table <- final_table %>% 
   mutate(
-    sheet_name = as.factor(sheet_name),
-    effect.measure = as.factor (effect.measure),
-    p0_Edgington = p0_Edgington, 
+    measure = as.factor (measure),
     opposing_directions = as.factor(opposing_directions)
-         )
-
-# 
-ma_info <- ma_info  %>% 
-  rowwise() %>%  #to process rowise 
-  mutate(
-    est_range = {
-      methods_to_check <- c(`est_Edgington`, `est_Edgington (1/SE)`, 
-                           `est_Edgington (1/SE^2)`, `est_Fixed effect`)
-      abs(max(methods_to_check, na.rm = TRUE) - min(methods_to_check, na.rm = TRUE))
-    },
-    
-    pval_range = {
-      p_values <- c(`p0_Edgington`, `p0_Edgington (1/SE)`, 
-                      `p0_Edgington (1/SE^2)`, `p0_Fixed effect`)
-      max(p_values, na.rm = TRUE) - min(p_values, na.rm = TRUE)
-    }
-  ) %>%
-  ungroup()
+  )
 ```
 
 
@@ -177,7 +189,7 @@ You can filter each column and click **View Report** to open the full analysis.
 - **p value Range ($H_0: \theta = 0$)**: difference between the maximum and minimum p-values across the methods, computed as $\max(p) - \min(p)$  
 - **Estimate Range**: absolute difference between point estimates across methods, computed as $|\max(\hat{\theta}) - \min(\hat{\theta})|$  
 - **Q value**: Cochran’s heterogeneity statistic  
-- **I² value**: heterogeneity percentage (higher values indicate more heterogeneity)  
+- **Rel Width Incr.**: Relative increase in confidence interval width of the **Edgington** method compared to Fixed Effect ($\frac{W_{Edg} - W_{FE}}{W_{FE}}$).
 - **Opposite directions**: *TRUE* if the singular study estimates have opposite signs
 - **SE ratio **: ratio of the singular studies standard errors (with the convention that the larger is at the numerator) i.e. $SE_{ratio} = \frac{max(SE)}{min(SE)}$
 - **Link**: opens the HTML report for the meta-analysis
@@ -191,21 +203,21 @@ You can filter each column and click **View Report** to open the full analysis.
 
 #check: https://rstudio.github.io/DT/#https://rstudio.github.io/DT/#
 
-ma_info %>%
+final_table %>%
   select(
-    "Identifier" = identifier, 
-    "Effect Measure" = effect.measure,
-    "p value Range (H<sub>0</sub>: &theta; = 0)" = pval_range,
+    "Identifier" = MA, 
+    "Effect Measure" = measure,
+    "p value Range" = p_range,
     "Estimate Range" = est_range,
+    "Rel Width Incr." = rel_width_increase,
     "Q value" = Q,
-    "I2 value" = I2,
-    "Edgington p value" = p0_Edgington,
+    "Edgington p" = p_Edgington,
     "Opposite directions" = opposing_directions,
     "SE ratio" = SE_ratio,
     "Link" = Report
   ) %>%
   datatable(
-    escape = FALSE, # Absolutely necessary to trasform those HTML in clickable links 
+  escape = FALSE, # Absolutely necessary to trasform those HTML in clickable links 
     filter = "top",   # Adds filters on top of each column
     options = list(
       pageLength = 50, #50 MA per page
@@ -214,6 +226,10 @@ ma_info %>%
       autoWidth = TRUE
     )
   ) %>%
-  formatRound(columns = c("Edgington p value", "Estimate Range", "Q value", "I2 value", "p value Range (H<sub>0</sub>: &theta; = 0)", "SE ratio"), digits = 3)
+  formatRound(columns = c("p value Range", "Estimate Range", "Rel Width Incr.", "Q value", "Edgington p", "SE ratio"), digits = 3) %>%
+  formatPercentage(columns = "Rel Width Incr.", digits = 1)
+
+
+
 ```
 

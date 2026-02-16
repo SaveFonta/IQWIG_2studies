@@ -1,5 +1,4 @@
 ---
-title: "Meta-Analysis Report"
 format: 
   html:
     embed-resources: true
@@ -10,10 +9,14 @@ params:
 ```{r}
 #| label: setup
 #| include: false
+#| message: false
+#| warning: false
+
 library(gt)
 library(dplyr)
+library(tidyverse)
 
-# Simply load the pre-calculated object
+# Load pre-calculated object
 res <- readRDS(params$result_path)
 l <- res[[1]]
 ```
@@ -22,8 +25,9 @@ l <- res[[1]]
 #| output: asis
 #| echo: false
 
-# Header
-cat("## ", l$ma_id, "\n\n", sep = "")
+# Title
+cat("# ", l$ma_id, "\n\n", sep = "")
+
 
 cat("This is meta-analysis number **",l$ma_id_number, "**, it uses the **", l$measure, "** as an outcome measure.\n\n", sep = "")
 
@@ -31,32 +35,26 @@ cat("The Data Formatting is **", l$additional_info$data_report, "**, and it belo
 
 
 # -----------------------------
-# Table 1: input studies
+# Table input studies
 # -----------------------------
 cat("The meta-analysis contains the following studies:\n\n")
 
-library(gt)
-library(tidyverse)
 
-# -----------------------------
-# Table 1: Inputs
-# -----------------------------
 tbl_inputs <- as.data.frame(l$inputs) %>%
   tibble::rownames_to_column(var = "Study") %>%
   gt() %>%
   tab_header(title = "Study Input Data") %>%
   cols_label(
     Study    = "Study Name",
-    estimate = "Log Estimate",
+    estimate = "Estimate",
     SE       = "Std. Error",
-    lower    = "95% CI", # Label changed to reflect the merge below
+    lower    = "95% CI", 
     width    = "Width"
   ) %>%
   cols_merge(
     columns = c(lower, upper),
     pattern = "({1}, {2})"
   ) %>%
-  # Formatting and Alignment
   fmt_number(columns = -Study, decimals = 3) %>%
   cols_align(align = "center", columns = -Study) %>%
   opt_stylize(style = 6, color = "blue") %>%
@@ -64,18 +62,30 @@ tbl_inputs <- as.data.frame(l$inputs) %>%
 
 print(tbl_inputs)
 
+
 # -----------------------------
-# Table 2: Results
+# Q value
+# -----------------------------
+
+cat(
+  "\n\n**Q value** ",
+  round(l$heterogeneity$Q, 3),
+  "\n\n",
+  sep = ""
+)
+
+
+# -----------------------------
+# Results table
 # -----------------------------
 tbl_results <- l$ci %>% 
   gt() %>%
-  tab_header(title = "Confidence Interval Estimation Results") %>%
+  tab_header(title = "Confidence Interval Results") %>%
   fmt_number(
     columns = c(estimate, lower, upper, aucc, p_0, width, aucc_ratio, ci_skewness), 
     decimals = 3
   ) %>%
   sub_missing(columns = everything(), missing_text = "—") %>%
-  # Merging CI columns
   cols_merge(
     columns = c(lower, upper),
     pattern = "({1}, {2})"
@@ -90,7 +100,6 @@ tbl_results <- l$ci %>%
     p_0         = "p-val (μ=0)",
     width       = "Width"
   ) %>%
-  # Styling and Alignment
   cols_align(align = "center", columns = -method) %>%
   tab_style(
     style = cell_text(weight = "bold"),
@@ -153,4 +162,4 @@ print(l$plot)
 
 ```
 
-**NOTE**: the plot and the estimates values for Fixed Effect are reported using the **Inverse Variance** method.
+**NOTE**: the plot for Fixed Effect method reports the Confidence Intervals using the **Inverse Variance** method.

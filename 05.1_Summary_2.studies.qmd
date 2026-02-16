@@ -2029,8 +2029,8 @@ $$
 
 alpha <- 0.05
 
-# Check lemma conditions
-cis_lemma <- check_lemma_conditions(cis, alpha = alpha)
+# Check lemma conditions (commented out since I already compute it in processing)
+#cis_lemma <- check_lemma_conditions(cis, alpha = alpha)
 
 # Extract and summarize results
 lemma_detailed <- extract_lemma_results(cis_lemma)
