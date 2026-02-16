@@ -7,7 +7,7 @@ library(dplyr)
 library(tidyr)
 
 ## ---- Read data ----
-Excel_name <- "IQWiG-MA-Datenbank_Stand2025.xlsx"
+Excel_name <- "IQWiG-MA-Datenbank_Stand2025_CORRECTED.xlsx"
 
 # True path, inside Input
 path_to_excel <- file.path("Input", Excel_name)
@@ -136,7 +136,7 @@ iqwig_all <- iqwig_all %>%
   select(-Studie_unique, -dup_index, -n_in_group, -Studie_orig)
 
 ## ---- Extract two-study MAs ----
-data_two_studies_2 <- iqwig_all[iqwig_all$AnzahlStudien == 2, ]
+data_two_studies <- iqwig_all[iqwig_all$AnzahlStudien == 2, ]
 
 
 #Define output file name

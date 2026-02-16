@@ -1,116 +1,153 @@
-# ==============================================================================
-# Script to Generate All MA Reports
-# ==============================================================================
-# Load required libraries
-if (!require("quarto", quietly = TRUE)) {
-  install.packages("quarto")
-  library(quarto)
-}
-if (!require("dplyr", quietly = TRUE)) {
-  install.packages("dplyr")
-  library(dplyr)
-}
+# ----- IQWiG Meta-Analysis Data Processing -----
+path <- "C:/Users/Menelao/Desktop/Held/confMeta/confMeta"
+devtools::load_all(path)
 
-# Define name of the singular MA qmd
-input_qmd <- "singular_MA.qmd"
-path <- file.path("Output", "cis.rds")
-input <- readRDS(path)
-df_estimates <- input$df_estimates
+library(meta)
+library(dplyr)
+library(stringr)
 
-# Create Reports directory if it doesn't exist
-reports_dir <- file.path("Output", "Reports")
-if (!dir.exists(reports_dir)) {
-  dir.create(reports_dir, recursive = TRUE)
-  cat("Created directory:", reports_dir, "\n")
-}
+# --- CONFIGURATION ---
+file_name   <- "data_two_studies.rds"
+inp         <- file.path("Output", file_name)
 
-# Get unique MA numbers with their info
-ma_info <- df_estimates %>%
-  select(no, identifier, sheet_name) %>%
-  distinct() %>%
-  arrange(no)
+# Directories
+REPORTS_DIR <- file.path("Output", "Reports")
+TEMP_DIR    <- file.path("Output", "Temp_Render_Files")
+BATCH_DIR   <- file.path("Output", "Batches_Intermediate") 
 
-cat("Found", nrow(ma_info), "unique meta-analyses\n\n")
+if (!dir.exists(REPORTS_DIR)) dir.create(REPORTS_DIR, recursive = TRUE)
+if (!dir.exists(TEMP_DIR)) dir.create(TEMP_DIR, recursive = TRUE)
+if (!dir.exists(BATCH_DIR)) dir.create(BATCH_DIR, recursive = TRUE)
 
-# ---- Generate Reports for Each MA ----
-# Track progress
-total_mas <- nrow(ma_info)
-successful <- 0
-failed <- 0
-error_log <- list()
+# --- LOAD DATA ---
+data_two_studies <- readRDS(inp)
+source("00_utilities.R")
+source("00_confMeta_parallelized.R")
 
-cat("Starting report generation...\n")
-cat(rep("=", 70), "\n", sep = "")
+# Process Data
+df_estimates <- process_escalc(data_two_studies, MH = TRUE)
+df_estimates <- df_estimates %>% 
+  mutate(effect.measure = ifelse(effect.measure == "OR (effekt)", "OR", effect.measure)) %>% 
+  mutate(effect.measure = ifelse(effect.measure == "RR (effekt)", "RR", effect.measure))
 
-for (i in 1:nrow(ma_info)) {
-  ma_no <- ma_info$no[i]
-  ma_id <- ma_info$identifier[i]
-  sheet <- ma_info$sheet_name[i]
+
+
+
+########################################
+# --- CALCULATION (With the plot!) --- #
+########################################
+unique_ids <- unique(df_estimates$no)
+num_batches <- 20
+id_chunks <- split(unique_ids, cut(seq_along(unique_ids), breaks = num_batches, labels = FALSE))
+
+message(sprintf("--- Processing %d batches of IDs ---", num_batches))
+
+for (i in 1:num_batches) {
   
-  cat(sprintf("\n[%d/%d] Processing MA #%d: %s\n", 
-              i, total_mas, ma_no, ma_id))
-  cat(sprintf("        Sheet: %s\n", sheet))
+  batch_file <- file.path(BATCH_DIR, paste0("batch_", i, ".rds"))
   
-  # Without this gsub, it wouldn't run, we need to normalize the id
-  safe_id <- gsub("[^A-Za-z0-9_-]", "_", ma_id)
-  output_file <- file.path(reports_dir, sprintf("%s.html", safe_id))
+  # If batch is already on disk, skip it... so we can stop the process
+  if (file.exists(batch_file)) {
+    message(sprintf("Batch %d already done. Skipping.", i))
+    next
+  }
   
-  # Try to render the report
-  tryCatch({
-    quarto::quarto_render(
-      input = input_qmd,
-      execute_params = list(
-        ma_no = ma_no,
-        ma_title = ma_id
-      ),
-      output_file = basename(output_file),
-      output_format = "html",
-      quiet = FALSE,
-      pandoc_args = c("--embed-resources", "--standalone")
-    )
+  message(sprintf("Processing Batch %d/%d...", i, num_batches))
+  
+  # Filter Data
+  batch_ids <- id_chunks[[i]]
+  batch_data <- df_estimates %>% filter(no %in% batch_ids)
+  
+  # Run Calculation
+  batch_results <- tryCatch({
+    confMeta.full(batch_data, 
+                  include_bayesian = FALSE, 
+                  generate_plot = TRUE, 
+                  MH = TRUE, 
+                  parallel = TRUE) 
+  }, error = function(e) {
+    message("Error in batch ", i, ": ", e$message)
+    return(NULL)
+  })
+  
+  
+  
+  # Save
+  if (!is.null(batch_results)) {
+    saveRDS(batch_results, batch_file)
+  }
+  
+  # Delete everything
+  rm(batch_results, batch_data)
+  gc() # FONDAMENTAL for really cleaning up the space
+  message(sprintf("Batch %d saved", i))
+}
+
+message("Calculations Complete. :)")
+
+
+
+
+
+####################
+# --- RENDERING ---#
+####################
+
+# Get list of batch files inside the directory
+batch_files <- list.files(BATCH_DIR, pattern = "batch_.*\\.rds", full.names = TRUE)
+
+#order it 
+batch_files <- batch_files[str_order(batch_files, numeric = TRUE)]
+
+
+message("--- Starting Report Rendering ---")
+
+SKIP <- TRUE  #set to TRUE to skip already rendered ones
+
+for (b_idx in seq_along(batch_files)) {
+  current_batch_results <- readRDS(batch_files[b_idx])
+  current_batch_results <- check_lemma_conditions(current_batch_results, alpha = 0.05)
+  
+  
+  # Loop through studies inside the batch
+  for (j in seq_along(current_batch_results)) {
+
+    res_obj <- current_batch_results[[j]]
     
-    # Move file to output directory
-    if (file.exists(basename(output_file))) {
-      file.rename(basename(output_file), output_file)
+    ma_id   <- res_obj$ma_id 
+    safe_id <- gsub("[^A-Za-z0-9_-]", "_", ma_id)
+    final_html <- file.path(REPORTS_DIR, paste0(safe_id, ".html"))
+    
+    # SKIP 
+    if (SKIP && file.exists(final_html)) {
+      next 
     }
     
-    successful <- successful + 1
-    cat(sprintf("        :) Successfully created: %s\n", output_file))
+    # Create temporary param for Quarto
+    temp <- file.path(TEMP_DIR, paste0("data_", safe_id, ".rds"))  
+    saveRDS(list(res_obj), temp) 
     
-  }, error = function(e) {
-    failed <- failed + 1
-    error_msg <- as.character(e)
-    error_log[[as.character(ma_no)]] <<- list(
-      ma_no = ma_no,
-      ma_id = ma_id,
-      error = error_msg
-    )
-    cat(sprintf("        X ERROR: %s\n", error_msg))
-  })
-}
-
-# ---- Summary ----
-cat("\n", rep("=", 70), "\n", sep = "")
-cat("SUMMARY\n")
-cat(rep("=", 70), "\n", sep = "")
-cat(sprintf("Total MAs processed: %d\n", total_mas))
-cat(sprintf("Successful: %d\n", successful))
-cat(sprintf("Failed: %d\n", failed))
-
-if (failed > 0) {
-  cat("\n", rep("-", 70), "\n", sep = "")
-  cat("ERRORS:\n")
-  cat(rep("-", 70), "\n", sep = "")
-  for (err in error_log) {
-    cat(sprintf("\nMA #%d (%s):\n", err$ma_no, err$ma_id))
-    cat(sprintf("  %s\n", err$error))
+    try({
+      quarto::quarto_render(
+        input = "singular_MA.qmd",
+        execute_params = list(result_path = temp),
+        output_file = paste0(safe_id, ".html"),
+        quiet = TRUE
+      )
+      
+      if (file.exists(paste0(safe_id, ".html"))) {
+        file.rename(paste0(safe_id, ".html"), final_html)
+      }
+    }, silent = TRUE)
+    
+    if (file.exists(temp)) unlink(temp)
+    sprintf("Finished rendering batch %d", j)
+    
   }
+  
+  # Unload the batch
+  rm(current_batch_results)
+  gc()
 }
 
-cat("\nAll reports saved in:", reports_dir, "\n")
-
-
-
-
-
-
+message(":)))) All Done!")
