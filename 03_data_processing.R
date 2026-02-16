@@ -1,9 +1,10 @@
-# ----- IQWiG Meta-Analysis Data Processing with escalc -----
-path <- "C:/Users/Menelao/Desktop/Held/confMeta/confMeta"
+#############################################
+##           03_data_processing            ##
+#############################################
 
-# load package
-devtools::load_all(path)
-#########################################
+
+
+
 library(meta)
 
 

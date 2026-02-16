@@ -1,6 +1,9 @@
-# ----- IQWiG Meta-Analysis Data Processing -----
-path <- "C:/Users/Menelao/Desktop/Held/confMeta/confMeta"
-devtools::load_all(path)
+#############################################
+##        04_master_for_generating         ##
+#############################################
+
+
+
 
 library(meta)
 library(dplyr)
