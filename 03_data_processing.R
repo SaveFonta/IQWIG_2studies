@@ -4,15 +4,14 @@
 
 
 
-
+library(dplyr)
 library(meta)
 
 
 #Define output file name from data cleaning 
 file_name <- "data_two_studies.rds"
+inp <- file.path("Output", file_name) # #Ouput directory 
 
-#Ouput directory 
-inp <- file.path("Output", file_name)
 
 
 
@@ -22,6 +21,8 @@ data_two_studies <- readRDS(inp)
 
 #load useful functions
 source("00_utilities.R")
+source("00_confMeta_parallelized.R") 
+
 
 # # Process the data using escalc wrapper 
 df_estimates <- process_escalc(data_two_studies, MH = TRUE)
@@ -44,7 +45,6 @@ df_estimates <- df_estimates %>%
 table(df_estimates$effect.measure) / 2
 #PEFECT
 
-source("00_confMeta_parallelized.R") #I'd like to add this part to the libarry confMeta
 estimates <- df_estimates
 time <- system.time ({
   cis <- confMeta.full(estimates, include_bayesian= FALSE, generate_plot = FALSE, MH = TRUE, parallel = TRUE)

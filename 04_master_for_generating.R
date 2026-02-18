@@ -9,23 +9,28 @@ library(meta)
 library(dplyr)
 library(stringr)
 
-# --- CONFIGURATION ---
+#Define output file name from data cleaning 
 file_name   <- "data_two_studies.rds"
-inp         <- file.path("Output", file_name)
+inp         <- file.path("Output", file_name) ##Ouput directory 
 
-# Directories
-REPORTS_DIR <- file.path("Output", "Reports")
-TEMP_DIR    <- file.path("Output", "Temp_Render_Files")
-BATCH_DIR   <- file.path("Output", "Batches_Intermediate") 
+
+# New directories 
+REPORTS_DIR <- file.path("Output", "Reports")  #where the reports will go
+TEMP_DIR    <- file.path("Output", "Temp_Render_Files") #temporary, after this should be empty
+BATCH_DIR   <- file.path("Output", "Batches_Intermediate")  #containing the batches with FULL objects (heavy on memory)
 
 if (!dir.exists(REPORTS_DIR)) dir.create(REPORTS_DIR, recursive = TRUE)
 if (!dir.exists(TEMP_DIR)) dir.create(TEMP_DIR, recursive = TRUE)
 if (!dir.exists(BATCH_DIR)) dir.create(BATCH_DIR, recursive = TRUE)
 
-# --- LOAD DATA ---
+
+
+# # Load your merged data
 data_two_studies <- readRDS(inp)
+
+#load useful functions
 source("00_utilities.R")
-source("00_confMeta_parallelized.R")
+source("00_confMeta_parallelized.R") 
 
 # Process Data
 df_estimates <- process_escalc(data_two_studies, MH = TRUE)
@@ -36,11 +41,15 @@ df_estimates <- df_estimates %>%
 
 
 
+
+
 ########################################
 # --- CALCULATION (With the plot!) --- #
 ########################################
+
+
 unique_ids <- unique(df_estimates$no)
-num_batches <- 20
+num_batches <- 20 #20 in arbitrary but seems to make the computer lag not too much
 id_chunks <- split(unique_ids, cut(seq_along(unique_ids), breaks = num_batches, labels = FALSE))
 
 message(sprintf("--- Processing %d batches of IDs ---", num_batches))

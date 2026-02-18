@@ -10,7 +10,7 @@ library(dplyr)
 library(tidyr)
 
 ## ---- Read data ----
-Excel_name <- "IQWiG-MA-Datenbank_Stand2025_CORRECTED.xlsx"
+Excel_name <- "IQWiG-MA-Datenbank_Stand2025.xlsx"
 
 # True path, inside Input
 path_to_excel <- file.path("Input", Excel_name)

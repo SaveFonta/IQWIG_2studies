@@ -1,118 +1,63 @@
-#' Perform Meta-Analysis with Confidence Distribution Methods
-#'
-#' @description
-#' Processes multiple meta-analyses from a dataset, computing confidence intervals
-#' using various methods including Edgington's combination method with different
-#' weighting schemes and optional Bayesian random-effects analysis.
-#'
-#' @param data A data frame containing meta-analysis data with effect estimates,
-#'   standard errors, study identifiers, and meta-analysis groupings.
-#' @param level Numeric. Confidence level for intervals (default: 0.95).
-#' @param est_col Character. Name of column containing effect estimates (default: "logEst").
-#' @param se_col Character. Name of column containing standard errors (default: "selogEst").
-#' @param ma_id_col_num Character. Name of column containing *numeric* meta-analysis IDs
-#'   for ordering (default: "no").
-#' @param ma_id_col Character. Name of column containing meta-analysis identifiers
-#'   (default: "identifier").
-#' @param effect.measure Character. Name of column containing effect measure type
-#'   (default: "effect.measure").
-#' @param study Character. Name of column containing study names (default: "study").
-#' @param parallel Logical. Whether to use parallel processing (default: FALSE) (can give problems in Windows).
-#' @param n_cores Integer. Number of cores for parallel processing. If NULL,
-#'   uses \code{detectCores() - 1} (default: NULL).
-#' @param show_progress Logical. Whether to show progress bar (default: TRUE).
-#' @param additional_info1_col Character. Name of first additional info column
-#'   (default: "data_report").
-#' @param additional_info2_col Character. Name of second additional info column
-#'   (default: "sheet_name").
-#' @param sign_threshold Numeric. Value used to check if the confidence interval contains the null hypothesis (default: 0).#'   
-#' @param ... Additional arguments passed to \code{get_ma_results()}.
-#'
-#' @return An object of class "confMeta.full.list" containing a named list of
-#'   meta-analysis results. Each element is an object of class "confMeta.full"
-#'   with components:
-#'   \describe{
-#'     \item{inputs}{Dataframe of effect estimates and standard errors}
-#'     \item{ma_id}{Meta-analysis identifier}
-#'     \item{ma_id_number}{Numeric meta-analysis ID}
-#'     \item{measure}{Effect measure type (RR, HR, OR, SMD, etc.)}
-#'     \item{plot}{ggplot object with forest and p-value function plots}
-#'     \item{ci}{Data frame with confidence intervals from all methods}
-#'     \item{p_0}{Named vector of p-values testing null hypothesis}
-#'     \item{width}{Named vector of confidence interval widths}
-#'     \item{heterogeneity}{Data frame with heterogeneity statistics (Q, I2, Tau2 and Tau2 computed with bayesmeta package)}
-#'     \item{significant}{Named logical vector indicating significance}
-#'     \item{aucc_df}{Data frame with AUCC metrics}
-#'     \item{ci_skewness}{Named vector of CI skewness measures}
-#'     \item{data_skewness}{Weighted skewness of input data}
-#'     \item{bayesian_model}{bayesmeta model object (if applicable)}
-#'     \item{additional_info}{Named list of additional information}
-#'   }
-#'
-#' @details
-#' This function processes multiple meta-analyses in parallel or sequentially.
-#' For each meta-analysis, it:
-#' \itemize{
-#'   \item Computes confidence intervals using Edgington's method with equal weights,
-#'     inverse-SE weights, and inverse-variance weights
-#'   \item Compares with fixed-effects and Hartung-Knapp methods
-#'   \item Optionally performs Bayesian random-effects meta-analysis for RR, HR, OR, or SMD
-#'   \item Generates forest plots and p-value function plots
-#'   \item Calculates AUCC (Area Under Confidence Curve) metrics
-#' }
-#'
-#' The function requires that each meta-analysis ID maps uniquely to a numeric ID.
-#' Meta-analyses with errors are skipped with warnings.
-#'
-#' @section Bayesian Analysis:
-#' When effect measure is RR, HR, OR, or SMD, Bayesian analysis uses half-normal
-#' priors on tau with default scales:
-#' \itemize{
-#'   \item RR or HR: scale = 0.1
-#'   \item OR: scale = 0.2
-#'   \item SMD: scale = 0.3
-#' }
-#' These defaults follow recommendations Lilienthal, Jona, et al. "Bayesian random‐effects meta‐analysis with empirical heterogeneity priors for application in health technology assessment with very few studies." Research Synthesis Methods 15.2 (2024): 275-287.
-#'
-#'
-#' @section Free Advices
-#' If computing a large number of meta-analyisis, better to set \code{generate_plot = FALSE} and 
-#' \code{include_bayesian = FALSE} to reduce the computational burden and the total memory used by the final object
-#'
-#' @examples
-#' \dontrun{
-#' # Prepare data
-#' library(dplyr)
-#' data <- read.csv("meta_analysis_data.csv")
-#'
-#' # Run meta-analyses in parallel
-#' results <- confMeta.full(
-#'   data = data,
-#'   level = 0.95,
-#'   parallel = TRUE,
-#'   n_cores = 4
-#' )
-#'
-#' # Access results for first meta-analysis
-#' results[[1]]$ci
-#' results[[1]]$plot
-#'
-#' # Sequential processing for small datasets
-#' results <- confMeta.full(
-#'   data = data,
-#'   parallel = FALSE
-#' )
-#' }
-#'
-#' @seealso \code{\link{get_ma_results}} for single meta-analysis processing
-#'
-#' @references
-#' Lilienthal, Jona, et al. "Bayesian random‐effects meta‐analysis with empirical heterogeneity priors 
-#' for application in health technology assessment with very few studies." Research Synthesis Methods 
-#' 15.2 (2024): 275-287.
-#'
-#' @export
 
+
+####################################################################
+######       00_confMeta_parallelized.R                        #####
+####################################################################
+
+
+# Processes multiple meta-analyses from a dataset, computing confMeta objects 
+# using Edgington with different weighting schemes, baselines and optional Bayesian random-effects analysis (HEAVY).
+
+# Arguments:
+#   data:                 DataFrame containing meta-analysis data with estimates, SEs, IDs, and groupings.
+#   level:                Confidence level for intervals
+#   est_col:              Column name for effect estimates
+#   se_col:               Column name for standard errors
+#   ma_id_col_num:        Column name for *numeric* meta-analysis IDs (ordering) (default: "no").
+#   ma_id_col:            Column name for meta-analysis identifiers (default: "identifier").
+#   effect.measure:       Column name for effect measure type (e.g. RD, MD, OR....).
+#   study:                Column name for study names
+#   parallel:             Whether to use parallel processing (default: FALSE).
+#   n_cores:              Number of cores. If NULL, uses detectCores() - 1.
+#   additional_info1_col: Name of first additional info column (default: "data_report").
+#   additional_info2_col: Name of second additional info column (default: "sheet_name").
+#   sign_threshold:       Value to check if CI contains null hypothesis (default: 0). 
+#   MH:                   If TRUE, performs Mantel-Haenszel FE. Requires cols ai, bi, ci, di, n1i, n2i.
+#   ... :                 Additional args passed to confMeta().
+#
+# Returns:
+#   An object of class "confMeta.full.list" (named list). Each element is "confMeta.full" with components:
+#     - inputs:           Dataframe of effect estimates and SEs.
+#     - ma_id:            Meta-analysis identifier.
+#     - ma_id_number:     Numeric meta-analysis ID.
+#     - measure:          Effect measure type (RR, HR, OR, SMD, etc.).
+#     - plot:             ggplot object with forest and p-value function plots.
+#     - ci:               Data frame with confidence intervals from all methods.
+#     - p_0:              Named vector of p-values testing null hypothesis.
+#     - width:            Named vector of CI widths.
+#     - heterogeneity:    Data frame with Q, I2, Tau2 (DL & Bayesian).
+#     - significant:      Named logical vector indicating significance.
+#     - aucc_df:          Data frame with AUCC metrics.
+#     - ci_skewness:      Named vector of CI skewness measures.
+#     - data_skewness:    Weighted skewness of input data.
+#     - bayesian_model:   bayesmeta model object (if applicable).
+#     - additional_info:  Named list of additional information.
+#
+# Bayesian Analysis Priors (based on Lilienthal et al., 2024):
+#   Uses half-normal priors on tau:
+#   - RR or HR: scale = 0.1
+#   - OR:       scale = 0.2
+#   - SMD:      scale = 0.3
+#
+# Note:
+#   For large numbers of meta-analyses, set generate_plot = FALSE and 
+#   include_bayesian = FALSE to save memory and time.
+# ==============================================================================
+
+
+
+
+ 
 confMeta.full <- function(data,
                    level = 0.95,
                    est_col = "logEst",
@@ -302,13 +247,8 @@ confMeta.full <- function(data,
 
 
 
-
-#' Process Single Meta-Analysis
-#'
-#' @description
-#' Internal function to process a single meta-analysis. Called by \code{confMeta.full()}
-#' @keywords internal
-#' @noRd
+#  ---- process_single_ma ----
+# wrapper of get_ma_result to subset data and run some checks
 
 
 
@@ -401,87 +341,12 @@ process_single_ma <- function(id, df, idx_by_id, id_col_name, n0, est_col, se_co
 
 
 
-#' Compute Meta-Analysis Results with Multiple CI Methods
-#'
-#' @description
-#' Performs a *single* meta-analysis using confidence distribution methods,
-#' computing confidence intervals via Edgington's combination with various
-#' weighting schemes, and optionally Bayesian random-effects analysis.
-#'
-#' @param data Data frame containing effect estimates and standard errors
-#'   for a single meta-analysis.
-#' @param level Numeric. Confidence level (default: 0.95).
-#' @param est_col Character. Column name for effect estimates (default: "logEst").
-#' @param se_col Character. Column name for standard errors (default: "selogEst").
-#' @param methods_to_exclude Character vector. Methods to exclude from results
-#'   (default: c("Random effects", "Henmi & Copas")).
-#' @param reference_methods Character vector. Reference methods for plotting
-#'   (default: c("fe", "hk")).
-#' @param plot_types Character vector. Types of plots to generate: "p" for
-#'   p-value functions, "forest" for forest plots (default: c("p", "forest")).
-#' @param study_name Character. Column name for study identifiers (default: "study").
-#' @param effect_measure Character. Column name for effect measure type
-#'   (default: "effect.measure").
-#' @param ma_id Character/Numeric. Meta-analysis identifier (default: NULL).
-#' @param ma_id_number Numeric. Meta-analysis numeric ID (default: NULL).
-#' @param additional_info Named list. Additional metadata to store (default: NULL).
-#' @param generate_plot Logical. Whether to generate plots (default: TRUE).
-#' @param include_bayesian Logical. Whether to perform Bayesian analysis
-#'   (default: TRUE).
-#' @param tau_prior_scale_rr Numeric. Prior scale for tau when effect measure
-#'   is RR or HR (default: 0.1).
-#' @param tau_prior_scale_or Numeric. Prior scale for tau when effect measure
-#'   is OR (default: 0.2).
-#' @param tau_prior_scale_smd Numeric. Prior scale for tau when effect measure
-#'   is SMD (default: 0.3).
-#' @param sign_threshold Numeric. Value used to check if the confidence interval contains the null hypothesis (default: 0).
-#' @param ... Additional arguments (currently unused).
-#'
-#' @return An object of class "confMeta.full" (see \code{\link{confMeta.full}} for details).
-#'
-#' @details
-#' This function is typically called by \code{confMeta.full()} but can be used standalone
-#' for analyzing a single meta-analysis.
-#'
-#' Methods computed:
-#' \itemize{
-#'   \item Edgington with equal weights
-#'   \item Edgington with inverse-SE weights
-#'   \item Edgington with inverse-variance weights
-#'   \item Fixed-effects (comparison)
-#'   \item Hartung-Knapp (comparison)
-#'   \item Bayesian random-effects (optional, for RR/HR/OR/SMD only)
-#' }
-#'
-#' @section Prior Specifications:
-#' Bayesian analysis uses half-normal priors on the heterogeneity parameter tau.
-#' Default scales are based on : Lilienthal, Jona, et al. "Bayesian random‐effects meta‐analysis with empirical heterogeneity priors 
-#' for application in health technology assessment with very few studies.":
-#' \itemize{
-#'   \item Log risk ratios (RR) or log hazard ratios (HR): scale = 0.1
-#'   \item Log odds ratios (OR): scale = 0.2  
-#'   \item Standardized mean differences (SMD): scale = 0.3
-#' }
-#'
-#' @examples
-#' \dontrun{
-#' # Single meta-analysis
-#' data_subset <- data[data$identifier == "MA001", ]
-#' 
-#' result <- get_ma_results(
-#'   data = data_subset,
-#'   level = 0.95,
-#'   include_bayesian = TRUE
-#' )
-#' 
-#' # View confidence intervals
-#' print(result$ci)
-#' 
-#' # Display plots
-#' print(result$plot)
-#' }
-#'
-#' @export
+# ---- get_ma_results ----
+
+# more useful function, gives an object confMeta.full, which is just an "augmented" confMeta object
+# unlike a confmeta object it involves many methods together in the same object.
+# It is called for each meta analysis, in the end we will have one big confMeta.full.list object, and its elements
+# will be one confmeta.full each MA 
 
 get_ma_results <- function(data, 
                            level = 0.95,
@@ -689,13 +554,38 @@ get_ma_results <- function(data,
   
 
   # ----- Generate Plots -----
-
+  
    if (generate_plot){
+     
+     # did we set xlim in the dots ? 
+     dot_argums <- list(...)
+     
+     if ("xlim" %in% names(dot_argums)) {
+       use_xlim <- dot_argums$xlim #if yes use it
+     } else {
+       # otw, compute it using individual studies CIs:
+       
+       # I decided to use the min (lower CIs) and max (upper CIS) and then add 10%
+       
+       min_lower <- min(ci_individual$lower, na.rm = TRUE)
+       max_upper <- max(ci_individual$upper, na.rm = TRUE)
+       
+       rng <- max_upper - min_lower
+       if (rng == 0) rng <- 1.0 # don't sure it can happen
+       
+       margin <- rng * 0.10 #arbitrary number for visualisation 
+       
+       use_xlim <- c(min_lower - margin, max_upper + margin)
+     }
+     
+     
+     
   plot_args <- append(
     cms,
     list(
       reference_methods = reference_methods,
-      type = plot_types
+      type = plot_types,
+      xlim = use_xlim  
     )
   )
   
@@ -755,7 +645,8 @@ get_ma_results <- function(data,
     aucc_df = aucc_df,
     ci_skewness = ci_skewness,
     data_skewness = data_skewness,
-    bayesian_model = if (include_bayesian) bm else NULL
+    bayesian_model = if (include_bayesian) bm else NULL,
+    table_2x2 = if (MH) table_2x2 else NULL
   )
   
   # additional_info: must be a named list (scalars already enforced by confMeta.full)

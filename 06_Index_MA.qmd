@@ -155,10 +155,42 @@ df_width_edg <- df_comparisons %>%
   filter(method == "Edgington") %>%
   select(MA, rel_width_increase)
 
+
+
+# FINAL REQUEST:
+# Calculate informativeness for every Method/MA combination
+info_data_wide <- df_mas %>%
+  left_join(df_inputs, by = "MA") %>%
+  mutate(
+    # Calculating study widths from SEs (assuming 95% CI)
+    width_s1 = SE_1 * 1.96 * 2,
+    width_s2 = SE_2 * 1.96 * 2,
+    
+    # Logic for informativeness
+    smaller_than_s1 = width < width_s1,
+    smaller_than_s2 = width < width_s2,
+    
+    status = case_when(
+      smaller_than_s1 & smaller_than_s2 ~ "Both",
+      smaller_than_s1 | smaller_than_s2 ~ "One",
+      TRUE                               ~ "None"
+    )
+  ) %>%
+  # Pivot the table so each Method gets its own Informativeness column
+  select(MA, method, status) %>%
+  pivot_wider(
+    names_from = method, 
+    values_from = status,
+    names_prefix = "Info_"
+  )
+
+
+
 # merge
 final_table <- df_inputs %>%
   left_join(df_ranges, by = "MA") %>%
   left_join(df_width_edg, by = "MA") %>%
+  left_join(info_data_wide, by = "MA") %>% 
   mutate(
     safe_id = gsub("[^A-Za-z0-9_-]", "_", MA),
     Report = paste0('<a href="Output/Reports/', safe_id, '.html" target="_blank" class="btn btn-primary btn-sm" style="text-decoration:none;">View Report</a>')
@@ -167,11 +199,15 @@ final_table <- df_inputs %>%
 
 
 
+
 # convert in factor what needed
 final_table <- final_table %>% 
   mutate(
     measure = as.factor (measure),
-    opposing_directions = as.factor(opposing_directions)
+    opposing_directions = as.factor(opposing_directions),
+    `Info_Edgington`= factor(`Info_Edgington`, levels = c("None", "One", "Both")),
+    `Info_Edgington (1/SE)` = factor(`Info_Edgington (1/SE)`, levels = c("None", "One", "Both")),
+    `Info_Edgington (1/SE^2)` = factor(`Info_Edgington (1/SE^2)`, levels = c("None", "One", "Both"))
   )
 ```
 
@@ -213,6 +249,9 @@ final_table %>%
     "Q value" = Q,
     "Edgington p" = p_Edgington,
     "Opposite directions" = opposing_directions,
+    "Info Edgington" = `Info_Edgington`, 
+    "Info Edgington (1/SE)" = `Info_Edgington (1/SE)`, 
+    "Info Edgington (1/SE^2)" = `Info_Edgington (1/SE^2)`,
     "SE ratio" = SE_ratio,
     "Link" = Report
   ) %>%

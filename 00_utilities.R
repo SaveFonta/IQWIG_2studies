@@ -5,8 +5,9 @@ library(metafor)
 library(dplyr)
 library(confMeta)
 library(gt)
-
-
+library(tidyr)   
+library(tibble)  
+library(ggplot2)
 
 # ---- wrapper escalc that handles all cases ---- 
 process_escalc <- function(df, zero_handling = "only0", MH = FALSE, ...) {
@@ -336,37 +337,7 @@ process_escalc <- function(df, zero_handling = "only0", MH = FALSE, ...) {
 # ----- Formatting functions for graph and summaries ----
 
 
-#In the last version I ma not using anymore, but for older versios it is necessary
-extract_ma_metric <- function(cis_list, metric) {
-  
-  # Extract the specific metric (width/significant/whatever)
-  res <- do.call("rbind", lapply(cis_list, function(x) x[[metric]]))
-  
-  #create a nice df specific for that metric
-  res <- as.data.frame(res)
-  
-  # add number of studies 
-  res$n_studies <- vapply(cis_list, function(x) nrow(x$inputs), integer(1L))
-  
-  #do the same thing by extracting measure from each element of cis_list and adding to a new column
-  res$measure <- vapply(cis_list, function(x) x$measure, character(1L))
-  
-  
-  # Format so that the MA name becomes a column
-  res <- rownames_to_column(res, var = "ma")
-  
-  res <- pivot_longer(res, cols = !c(ma, n_studies, measure))
-  res <- rename(res, "MA" = ma, "method" = name, !!metric := value) #nice! This is the dyplier way
-  
-  res <- mutate(res, n_studies = group(n_studies))
-  res <- mutate(res, n_studies = add_group_size(group_ind = n_studies, strata = MA))
-  
-  return(res)
-}
-
-
-
-#utilities to compute summary statistics from an obbject processed by extract_ma_metric
+# ----utilities to compute summary statistics from an obbject processed by extract_ma_metric ----
 
 
 #  Summary Function
@@ -447,7 +418,6 @@ render_gt <- function(table, title, decimals = 2, group_col = NULL) { #usually g
       columns = where(is.numeric), 
       decimals = decimals
     ) %>%
-    # Align everything center except the first column (labels)
     cols_align(
       align = "center",
       columns = -1
