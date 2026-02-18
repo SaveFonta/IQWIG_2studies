@@ -1,0 +1,219 @@
+---
+format: 
+  html:
+    embed-resources: true
+params:
+  result_path: "" 
+---
+
+```{r}
+#| label: setup
+#| include: false
+#| message: false
+#| warning: false
+
+library(gt)
+library(dplyr)
+library(tidyverse)
+
+# Load pre-calculated object
+res <- readRDS(params$result_path)
+l <- res[[1]]
+```
+
+```{r}
+#| output: asis
+#| echo: false
+
+# Title
+cat("# ", l$ma_id, "\n\n", sep = "")
+
+
+cat("This is meta-analysis number **",l$ma_id_number, "**, it uses the **", l$measure, "** as an outcome measure.\n\n", sep = "")
+
+cat("The Data Formatting is **", l$additional_info$data_report, "**, and it belongs to the sheet: ", l$additional_info$sheet_name, "\n\n", sep = "")
+
+
+# -----------------------------
+# Table input studies
+# -----------------------------
+cat("The meta-analysis contains the following studies:\n\n")
+
+
+tbl_inputs <- as.data.frame(l$inputs) %>%
+  tibble::rownames_to_column(var = "Study") %>%
+  gt() %>%
+  tab_header(title = "Study Input Data") %>%
+  cols_label(
+    Study    = "Study Name",
+    estimate = "Estimate",
+    SE       = "Std. Error",
+    lower    = "95% CI", 
+    width    = "Width"
+  ) %>%
+  cols_merge(
+    columns = c(lower, upper),
+    pattern = "({1}, {2})"
+  ) %>%
+  fmt_number(columns = -Study, decimals = 3) %>%
+  cols_align(align = "center", columns = -Study) %>%
+  opt_stylize(style = 6, color = "blue") %>%
+  tab_options(table.width = pct(100))
+
+print(tbl_inputs)
+
+
+
+# -----------------------------
+# Q value
+# -----------------------------
+
+cat(
+  "\n\n**Q value** ",
+  round(l$heterogeneity$Q, 3),
+  "\n\n",
+  sep = ""
+)
+
+
+
+# -----------------------------
+# 2x2 Table (only if present)
+# -----------------------------
+if (!is.null(l$table_2x2)) {
+  
+  cat("\n\nFor this meta-analysis, data were provided as a 2x2 Contingency Table, so the **Mantel–Haenszel** method is used for Fixed Effects.\n\n")
+  
+study_names <- rownames(l$inputs) 
+#add study names
+  df_2x2 <- cbind(Study = study_names, l$table_2x2)
+  
+  tbl_2x2 <- df_2x2 %>%
+    gt() %>%
+    tab_header(title = "Raw Data (2x2 Table)") %>%
+    cols_label(
+      Study    = "Study Name",
+      ai       = "Events",
+      bi       = "Non-Ev.",
+      n1i      = "Total",
+      ci       = "Events",
+      di       = "Non-Ev.",
+      n2i      = "Total"
+    ) %>%
+    #ADD SPANNER!
+    tab_spanner(
+      label = "Experimental Group",
+      columns = any_of(c("ai", "bi", "n1i")),
+      id = "exp"
+    ) %>%
+    tab_spanner(
+      label = "Control Group",
+      columns = any_of(c("ci", "di", "n2i")),
+      id = "ctrl"
+
+    )  %>% tab_style(
+    style = cell_text(color = "black"),
+    locations = cells_column_spanners(spanners = c("exp", "ctrl"))
+  )  %>%
+         fmt_number(columns = any_of(c("ai", "bi", "n1i", "ci", "di", "n2i")), decimals = 0) %>% 
+        cols_align(align = "center", columns = -Study) %>%
+    opt_stylize(style = 6, color = "blue") %>% 
+    tab_options(table.width = pct(100))
+    
+  print(tbl_2x2)
+}
+
+
+
+# -----------------------------
+# Results table
+# -----------------------------
+tbl_results <- l$ci %>% 
+  gt() %>%
+  tab_header(title = "Confidence Interval Results") %>%
+  fmt_number(
+    columns = c(estimate, lower, upper, aucc, p_0, width, aucc_ratio, ci_skewness), 
+    decimals = 3
+  ) %>%
+  sub_missing(columns = everything(), missing_text = "—") %>%
+  cols_merge(
+    columns = c(lower, upper),
+    pattern = "({1}, {2})"
+  ) %>%
+  cols_label(
+    method      = "Method",
+    estimate    = "Estimate",
+    lower       = "95% CI",
+    aucc        = "AUCC",
+    aucc_ratio  = "AUCC Ratio",
+    ci_skewness = "Skewness (β)",
+    p_0         = "p-val (μ=0)",
+    width       = "Width"
+  ) %>%
+  cols_align(align = "center", columns = -method) %>%
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_body(
+      columns = lower,
+      rows = (significant == TRUE)
+    )
+  ) %>%
+  cols_hide(columns = c(significant)) %>%
+  opt_stylize(style = 6, color = "blue") %>%
+  tab_options(table.width = pct(100))
+
+print(tbl_results)
+
+# -----------------------------
+# Weighted skewness
+# -----------------------------
+cat(
+  "\n\n**Weighted skewness of study effects (γ):** ",
+  round(l$data_skewness, 3),
+  "\n\n",
+  sep = ""
+)
+
+
+# -----------------------------
+# Plot
+# -----------------------------
+cat("In a graphical representation, this looks as follows.\n\n")
+print(l$plot)
+
+
+
+# -----------------------------
+# Lemma 4.3.1 
+# -----------------------------
+lc <- l$lemma_check
+
+if (!is.null(lc)) {
+  cat("\n\n### Lemma 4.3.1\n\n")
+  
+  cond_text <- dplyr::case_when(
+    isTRUE(lc$condition1_holds) && isTRUE(lc$condition2_holds) ~
+      "Both Condition 1 and Condition 2 hold.",
+    isTRUE(lc$condition1_holds) ~
+      "Only Condition 1 holds.",
+    isTRUE(lc$condition2_holds) ~
+      "Only Condition 2 holds.",
+    TRUE ~
+      "Neither Condition 1 nor Condition 2 holds."
+  )
+  
+  cat(cond_text, "\n\n")
+  
+  if (isTRUE(lc$lemma_verified)) {
+    cat("Lemma 4.3.1 is **verified** in this meta-analysis (the Edgington confidence interval is shorter than the fixed-effect confidence interval as predicted).\n\n")
+  } else if (isTRUE(lc$reverse_lemma_not_true)) {
+    cat("In this meta-analysis, the Edgington confidence interval is shorter even though neither condition holds. This shows that the **reverse** of Lemma 4.3.1 does not hold: the conditions are sufficient but not necessary.\n\n")
+  } else if (isFALSE(lc$applicable)) {
+    cat("Lemma 4.3.1 is not applicable for this meta-analysis (e.g., it does not involve exactly two studies).\n\n")
+  }
+}
+
+
+```
+
+

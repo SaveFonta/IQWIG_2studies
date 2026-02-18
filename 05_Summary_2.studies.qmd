@@ -26,34 +26,22 @@ editor:
 #| label: setup
 #| include: false
 
-load_libraries <- function(...) {
-  pkgs <- as.character(match.call(expand.dots = FALSE)$...)
-  
-  for (pkg in pkgs) {
-    if (!require(pkg, character.only = TRUE, quietly = TRUE)) {
-      
-      # If not there (FALSE), install and then load it
-      install.packages(pkg)
-      library(pkg, character.only = TRUE, quietly = TRUE)
-    }
-  }
-}
-
-# Install and load required packages
-if (!requireNamespace("remotes", quietly = TRUE)) {
-  install.packages("remotes")
-}
-if (!requireNamespace("confMeta", quietly = TRUE)) {
-  remotes::install_github("SaveFonta/confMeta", upgrade = "never")
-}
-
-# Load all libraries
-load_libraries(
-  "confMeta", "bayesmeta", "dplyr", "tibble", "tidyr", 
-  "ggplot2", "patchwork", "gt", "parallel", 
-  "ggbeeswarm", "purrr", "ggridges", "ggforce", "plotly", "irr",
-  "ggh4x"
-)
+library(confMeta)
+library(bayesmeta)
+library(dplyr)
+library(tibble)
+library(tidyr)
+library(ggplot2)
+library(patchwork)
+library(gt)
+library(parallel)
+library(ggbeeswarm)
+library(purrr)
+library(ggridges)
+library(ggforce)
+library(plotly)
+library(irr)
+library(ggh4x)
 
 # Set global theme for ggplot
 theme_set(theme_minimal(base_size = 11))
