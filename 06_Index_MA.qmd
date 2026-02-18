@@ -33,28 +33,11 @@ table.dataTable thead th {
 ```{r}
 #| label: setup
 #| include: false
-load_libraries <- function(...) {
-  pkgs <- as.character(match.call(expand.dots = FALSE)$...)
-  
-  for (pkg in pkgs) {
-    if (!require(pkg, character.only = TRUE, quietly = TRUE)) {
-      
-      # If not there (FALSE), install and then load it
-      install.packages(pkg)
-      library(pkg, character.only = TRUE, quietly = TRUE)
-    }
-  }
-}
 
-# Install and load required packages
-if (!requireNamespace("remotes", quietly = TRUE)) {
-  install.packages("remotes")
-}
-#remotes::install_github("SaveFonta/confMeta", quiet = TRUE, upgrade = "never")
-
-# Load all libraries
-load_libraries(
-  "dplyr", "DT", "tidyr", "purrr")
+library("dplyr")
+library("DT")
+library("tidyr")
+library("purrr")
 
 
 # input data from

@@ -141,7 +141,7 @@ for (b_idx in seq_along(batch_files)) {
     
     try({
       quarto::quarto_render(
-        input = "singular_MA.qmd",
+        input = "00_singular_MA.qmd",
         execute_params = list(result_path = temp),
         output_file = paste0(safe_id, ".html"),
         quiet = TRUE
