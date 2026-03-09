@@ -351,8 +351,8 @@ process_single_ma <- function(id, df, idx_by_id, id_col_name, n0, est_col, se_co
 get_ma_results <- function(data, 
                            level = 0.95,
                            est_col = "logEst", se_col = "selogEst",
-                           methods_to_exclude = c("Random effects", "Henmi & Copas"),
-                           reference_methods = c("fe", "hk"),
+                           methods_to_exclude =  c("Random effects", "Henmi & Copas"),
+                           reference_methods = c("fe", "hk"), #those are the reference methods for the plot
                            plot_types = c("p", "forest"),
                            study_name ="study", 
                            effect_measure = "effect.measure",
@@ -497,10 +497,11 @@ get_ma_results <- function(data,
 
   ci_out <- .create_ci_dataframe(ci_all, sign_threshold = sign_threshold)
   
-  # Filter out unwanted methods
-  ci_out <- ci_out %>%
-    filter(!method %in% methods_to_exclude)
-  
+  # Filter out unwanted methods (if NULL is passed, then give all comparison methods)
+  if (!is.null(methods_to_exclude) && length(methods_to_exclude) > 0) {
+    ci_out <- ci_out %>%
+      filter(!method %in% methods_to_exclude)
+  }
 
   # ---- Add p-vals -----
 
