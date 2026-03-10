@@ -144,9 +144,11 @@ data_two_studies <- iqwig_all[iqwig_all$AnzahlStudien == 2, ]
 
 #Define output file name
 file_name <- "data_two_studies.rds"
+file_name_all <- "data_all_studies.rds"
 
 #Ouput directory 
 out <- file.path("Output", file_name)
-
+out_all <- file.path("Output", file_name_all)
 
 saveRDS(data_two_studies, file = out)
+saveRDS(iqwig_all, file = out_all)
