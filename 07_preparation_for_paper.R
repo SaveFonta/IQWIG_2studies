@@ -39,7 +39,7 @@ table(df_estimates$effect.measure) / 2
 estimates <- df_estimates
 time <- system.time ({
   cis <- confMeta.full(estimates, include_bayesian= FALSE, generate_plot = FALSE, 
-                       MH = TRUE, parallel = TRUE, methods_to_exclude = c("Hartung & Knapp", "Henmi & Copas"))
+                       MH = TRUE, parallel = TRUE, methods_to_exclude = c("Henmi & Copas"))
 })
 
 
