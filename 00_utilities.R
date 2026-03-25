@@ -460,7 +460,7 @@ check_single_ma <- function(ma_result, alpha, edgington_method, fe_method) {
   estimates <- inputs[, "estimate"]
   SEs <- inputs[, "SE"]
   
-  # Extract widths for Edgington and Fixed Effect
+  # Extract widths for Edgington and Fixed-Effect
   width_edg <- ma_result$width[edgington_method]
   width_fe <- ma_result$width[fe_method]
   
@@ -576,7 +576,7 @@ check_single_ma <- function(ma_result, alpha, edgington_method, fe_method) {
 check_lemma_conditions <- function(ci_results,
                                    alpha = 0.05,
                                    edgington_method = "Edgington",
-                                   fe_method = "Fixed effect") {
+                                   fe_method = "Fixed-effect") {
   
   # Initial condition, alpha < 1/4
   if (alpha>= 1/4) stop("alpha must be smaller than 1/4 to check the Lemma")
