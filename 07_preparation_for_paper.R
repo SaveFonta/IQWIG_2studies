@@ -71,11 +71,9 @@ time <- system.time({
 
 # -------------------------------------------------------------------------------------------
 
-##  FOR SAMUEL --> if you have time to waste, I was just curious to understand how relevant is the difference between using DL and PM... 
-## I tried to compare the old cis that we were getting by using PM on both "re" and "hk" with these new cis. But fitting 'confMeta.full' on the first 100 rows of 'df_estimates', I didn't find any differences.
-## Maybe only studies with high heterogeneity changes the results.... 
+##  FOR SAMUEL 
+## If you want to empirically evaluate the results using instead PM or REML, just run also this and use waldo::compare
 
-# Anyway if you want to see the differences you can also run this.  
 
 ## You can delete and push this comment and this block of code once you are done
 cis_iv.pm <- confMeta.full(df_estimates_noMH,
