@@ -8,6 +8,7 @@ library(gt)
 library(tidyr)   
 library(tibble)  
 library(ggplot2)
+library(bayesmeta)
 
 # ---- wrapper escalc that handles all cases ---- 
 process_escalc <- function(df, zero_handling = "only0", MH = FALSE, ...) {

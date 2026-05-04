@@ -45,22 +45,63 @@ table(df_estimates$effect.measure) / 2
 
 #Process both, the only difference is that for the MAs that have 2x2 table, we use MH instead of IV, but
 # the name of the method is always called Fixed-effect
+
+# NOTE that now we use DL for re and PM for hk following IQWIG guidelines
 time <- system.time({
   cis_iv <- confMeta.full(df_estimates_noMH,
                           include_bayesian    = FALSE,
                           generate_plot       = FALSE,
                           MH                  = FALSE,
                           parallel            = TRUE,
-                          methods_to_exclude  = c("Henmi & Copas"))
+                          methods_to_exclude  = c("Henmi & Copas"),
+                          method.tau.re = "DL",  
+                          method.tau.hk = "PM"   )
+                          
 
   cis_mh <- confMeta.full(df_estimates,
                           include_bayesian    = FALSE,
                           generate_plot       = FALSE,
                           MH                  = TRUE,
                           parallel            = TRUE,
-                          methods_to_exclude  = c("Henmi & Copas"))
+                          methods_to_exclude  = c("Henmi & Copas"),
+                          method.tau.re = "DL", 
+                          method.tau.hk = "PM"  )
 })
 
+
+# -------------------------------------------------------------------------------------------
+
+##  FOR SAMUEL --> if you have time to waste, I was just curious to understand how relevant is the difference between using DL and PM... 
+## I tried to compare the old cis that we were getting by using PM on both "re" and "hk" with these new cis. But fitting 'confMeta.full' on the first 100 rows of 'df_estimates', I didn't find any differences.
+## Maybe only studies with high heterogeneity changes the results.... 
+
+# Anyway if you want to see the differences you can also run this.  
+
+## You can delete and push this comment and this block of code once you are done
+cis_iv.pm <- confMeta.full(df_estimates_noMH,
+                        include_bayesian    = FALSE,
+                        generate_plot       = FALSE,
+                        MH                  = FALSE,
+                        parallel            = TRUE,
+                        methods_to_exclude  = c("Henmi & Copas"),
+                        method.tau.re = "PM",  
+                        method.tau.hk = "PM"   )
+
+
+cis_mh.pm <- confMeta.full(df_estimates,
+                        include_bayesian    = FALSE,
+                        generate_plot       = FALSE,
+                        MH                  = TRUE,
+                        parallel            = TRUE,
+                        methods_to_exclude  = c("Henmi & Copas"),
+                        method.tau.re = "PM", 
+                        method.tau.hk = "PM"  )
+
+library(waldo)
+compare(cis_iv, cis_iv.pm, tolerance = 1e-8)
+compare(cis_mh, cis_mh.pm, tolerance = 1e-8)
+
+#-----------------------------------------------------------------------------------------------
 
 
 #-----------------------------------------------------
