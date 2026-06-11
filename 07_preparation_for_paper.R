@@ -40,10 +40,10 @@ table(df_estimates$effect.measure) / 2
 
 
 # -------------------------------------------------------
-# Now we can process usign the param 'methods_to_exclude' to decide which methods to exclude.
+# Now we can process using the param 'methods_to_exclude' to decide which methods to exclude.
 # If you don't want to exclude anything, just set 'methods_to_exclude = NULL'
 
-#Process both, the only difference is that for the MAs that have 2x2 table, we use MH instead of IV, but
+# Process both, the only difference is that for the MAs that have 2x2 table, we use MH instead of IV, but
 # the name of the method is always called Fixed-effect
 
 # NOTE that now we use DL for re and PM for hk following IQWIG guidelines
@@ -69,37 +69,8 @@ time <- system.time({
 })
 
 
-# -------------------------------------------------------------------------------------------
-
-##  FOR SAMUEL 
-## If you want to empirically evaluate the results using instead PM or REML, just run also this and use waldo::compare
 
 
-## You can delete and push this comment and this block of code once you are done
-cis_iv.pm <- confMeta.full(df_estimates_noMH,
-                        include_bayesian    = FALSE,
-                        generate_plot       = FALSE,
-                        MH                  = FALSE,
-                        parallel            = TRUE,
-                        methods_to_exclude  = c("Henmi & Copas"),
-                        method.tau.re = "PM",  
-                        method.tau.hk = "PM"   )
-
-
-cis_mh.pm <- confMeta.full(df_estimates,
-                        include_bayesian    = FALSE,
-                        generate_plot       = FALSE,
-                        MH                  = TRUE,
-                        parallel            = TRUE,
-                        methods_to_exclude  = c("Henmi & Copas"),
-                        method.tau.re = "PM", 
-                        method.tau.hk = "PM"  )
-
-library(waldo)
-compare(cis_iv, cis_iv.pm, tolerance = 1e-8)
-compare(cis_mh, cis_mh.pm, tolerance = 1e-8)
-
-#-----------------------------------------------------------------------------------------------
 
 
 #-----------------------------------------------------

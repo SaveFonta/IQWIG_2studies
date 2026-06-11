@@ -12,6 +12,26 @@ library(tidyr)
 ## ---- Read data ----
 Excel_name <- "IQWiG-MA-Datenbank_Stand2025.xlsx"
 
+
+
+#--------------------------------------------------------
+# Remember that the original file that Leonie sent by email is saved locally: "Original_IQWiG-MA-Datenbank_Stand2025.xlsx". 
+
+#  Here are the changes applied to it, and the new file is Excel_name: 
+
+# 1) Since the meta analysis: A20-93 || Abb. 12 || HbA1c was reported with estimates:
+
+  #PIONEER6 = -0.66
+  #SUSTAIN6 = 0.87
+  #However, according to IQWiG Project A20-93, it should be changed by hand to:
+  
+  #PIONEER6 = -0.66
+  #SUSTAIN6 = -0.87
+
+# 2) for clearness, the old file had some empty lines at the end of Dossier and at EVB sheets, I cancelled them by hand
+
+
+
 # True path, inside Input
 path_to_excel <- file.path("Input", Excel_name)
 
@@ -93,7 +113,7 @@ iqwig_all <- iqwig_all %>%
 rows_no_estimate <- iqwig_all %>%
   filter(no_estimate)
 
-## ---- Recompute AnzahlStudien ----
+## ---- Recompute AnzahlStudien ---- (useless step)
 drop_counts <- rows_no_estimate %>%
   count(MA_id, name = "n_drop")
 
@@ -152,3 +172,13 @@ out_all <- file.path("Output", file_name_all)
 
 saveRDS(data_two_studies, file = out)
 saveRDS(iqwig_all, file = out_all)
+
+
+
+
+# save the 2 studies also in Excel 
+library(writexl)
+
+out_excel <- file.path("Output", "data_two_studies.xlsx")
+
+write_xlsx(data_two_studies, path = out_excel)
